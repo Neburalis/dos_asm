@@ -6,12 +6,11 @@ locals @@
 org 100h
 
 VideoMemorySeg 	equ 0b800h
-Debug			equ 1
+INCLUDE debug.inc
 
-BkPt MACRO
-	IF Debug
-		int 03h
-	ENDIF
+exit0 MACRO
+	mov ax, 4c00h
+	int 21h
 ENDM
 
 Start:
@@ -23,7 +22,7 @@ Start:
 
 	; xor bx, bx			; bx = 0, comment because on start its 0
 
-	mov al, '$'
+	; mov al, '$'
 	mov ah, 4eh
 
 	mov dh, 5d
@@ -52,10 +51,9 @@ Start:
 
 	; call PrintCMDLine
 
-	mov ax, 4c00h
-	int 21h
+	exit0
 
-; макрос для расчета offset в оперативной памяти
+; Macro to compute video memory offset from DX coordinates
 ;
 ; IN:
 ;	DH = line (Y) (0-24)
@@ -75,7 +73,7 @@ calc_offset MACRO
 	shl ax, 1						; ax *= 2
 ENDM
 
-; функция для вывода символа AL (цвет в AH) на экран по координатам в dx
+; Function to print symbol AL (color in AH) on screen at coordinates in DX
 ;
 ; IN:
 ;	DH = line (Y) (0-24)
@@ -101,9 +99,9 @@ PrintCharAt PROC
 	ret
 PrintCharAt ENDP
 
-; функция для вывода горизонтальной линии длинны cx начиная с координат dx из символа ax
+; Function to print a horizontal line of CX symbols starting at coordinates DX with symbol AX
 ;
-; можно выводить справа налево если установить DirFlag = down
+; Also prints right-to-left if DirFlag = down (STD)
 ;
 ; IN:
 ;	DH = line (Y) (0-24)
@@ -130,7 +128,7 @@ PrintHLine PROC
 	ret
 PrintHLine ENDP
 
-; функция для вывода вертикальной линии длинны cx начиная с координат dx из символа ax
+; Function to print a vertical line of CX symbols starting at coordinates DX with symbol AX
 ;
 ; IN:
 ;	DH = line (Y) (0-24)
@@ -161,7 +159,7 @@ PrintVLine PROC
 	ret
 PrintVLine ENDP
 
-; функция для вывода вертикальной линии снизу вверх заданной длинны
+; Function to print a vertical line of CX symbols going upward from starting coordinates DX
 ;
 ; IN:
 ;	DH = line (Y) (0-24)
@@ -192,7 +190,7 @@ PrintIVLine PROC
 	ret
 PrintIVLine ENDP
 
-; функция для вывода прямоугольной рамки, символы берутся из массива в DataSegment
+; Function to print a rectangular frame, characters taken from array in DataSegment
 ;
 ; IN:
 ;	DH   = Ystart (0-24)
@@ -212,43 +210,49 @@ PrintIVLine ENDP
 ;
 PrintFrame PROC
 ;
-; Аналог функции на c:
+; Logic of function in C:
 ;
 ; //  frameChars[9]:
-; //    [0]=┌ [1]=─ [2]=┐
-; //    [3]=│           [5]=│
-; //    [6]=└ [7]=─ [8]=┘
-; //  frameAttr  ? атрибут цвета рамки
-; //  fillAttr   ? атрибут цвета заливки (пока не используется в данной функции)
+; //    [0]= [1]=тХР [2]=тХЧ
+; //    [3]=тХС           [5]=тХС
+; //    [6]=тХЪ [7]=тХР [8]=тХЭ
+; //  frameAttr  - color attribute of frame
+; //  fillAttr   - color attribute of fill (unused in current function)
 ;
 ; void print_frame(byte x,				byte y,
 ;                  byte width,			byte height,
 ;                  byte frame_chars[9],
 ;                  byte frame_attr,		byte fill_attr)
 ; {
-;    // Верхний левый угол ┌
+;	 // Fill background
+;	 fill_frame(x+1, y+1, height-2, width-2, frame_chars[4], fill_attr);
+;
+;    // Upper left corner
 ;    print_char_at(x, y, frame_chars[0], frame_attr);
 ;
-;    // Верхняя горизонталь ─  (X+1 .. X+width-2)
+;    // Upper horizontal  (X+1 .. X+width-2)
 ;    print_hline(x + 1, y, width - 2, frame_chars[1], frame_attr);
 ;
-;    // Левая вертикаль │  (Y+1 .. Y+height-2)
+;    // Left vertical  (Y+1 .. Y+height-2)
 ;    print_vline(x, y + 1, height - 2, frame_chars[3], frame_attr);
 ;
-;    // Правая вертикаль │
+;    // Right vertical
 ;    print_vline(x + width - 1, y + 1, height - 2, frame_chars[5], frame_attr);
 ;
-;    // Нижняя горизонталь ─
+;    // Lower horizontal
 ;    print_hline(x + 1, y + height - 1, width - 2, frame_chars[7], frame_attr);
 ;
-;    // Нижний правый угол ┘
+;    // Lower right corner
 ;    print_char_at(x + width - 1, y + height - 1, frame_chars[8], frame_attr);
 ;
-;    // Нижний левый угол └
+;    // Lower left corner
 ;    print_char_at(x, y + height - 1, frame_chars[6], frame_attr);
 ;
-;    // Верхний правый угол ┐
+;    // Upper right corner
 ;    print_char_at(x + width - 1, y, frame_chars[2], frame_attr);
+;
+;	 // Print args
+;	 print_cmd_args(x + 2, y + 2, argc, argv);
 ; }
 ;
 	push bp
@@ -258,7 +262,7 @@ PrintFrame PROC
 	push dx
 
 	mov cx, [bp - 2]	; cx = bx
-	xor ch, ch		; ch = 0; cl = bl = width
+	xor ch, ch		    ; ch = 0; cl = bl = width
 	sub cx, 2
 
 	mov al, [frameChars]
@@ -350,19 +354,44 @@ PrintFrame PROC
 	ret
 PrintFrame ENDP
 
-; Функция для заливки прямоугольника
+; Function to fill rectangle with spaces
 ;
-; Args in stack, pascal
+; Args in stack (pascal), 3 words, callee cleans:
 ; IN:
-;	stack[0] = line (Y) (0-24)
-;	stack[1] = col  (X) (0-80)
-;
+;	stack[0] = DH: line Y (0-24),  DL: col X (0-80)
+;	stack[2] = BH: Height,          BL: Width
+;	stack[4] = symbol to fill (low byte - symbol, high byte - attribute)
+; OUT:
+;	-
+; EXP:
+;	ES = b800h
+; DESTR:
+;	AX, BX, CX, DX, DI
 ;
 FillFrame PROC
-	ret
+	push bp
+	mov bp, sp
+
+	mov dx, [bp+4]				; dh = y,      dl = x
+	mov bx, [bp+6]				; bh = height, bl = width
+	mov ax, [bp+8]				; ax = fill color
+
+	cld
+
+	@@loop:
+		push bx
+		mov cl, bl
+		call PrintHLine
+		pop bx
+		inc dh					; advance to next row
+		dec bh
+	jnz @@loop
+
+	pop bp
+	ret 6
 FillFrame ENDP
 
-; вывести командную строчку по координатам dx, с атрибутом ah
+; Print command line at coordinates DX, with attribute AH
 ; IN:
 ;	DH = line (Y) (0-24)
 ;	DL = col  (X) (0-80)
@@ -370,7 +399,7 @@ FillFrame ENDP
 ; OUT:
 ;	-
 ; DESTR:
-; 	-
+; 	DirFlag
 ;
 PrintCMDLine PROC
 	push di
