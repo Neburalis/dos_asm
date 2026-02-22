@@ -1,0 +1,25 @@
+# Compiled executables
+*.com
+*.exe
+
+# Object files
+*.obj
+
+# Linker output
+*.map
+
+# Assembler listings
+*.lst
+
+# Turbo Debugger symbols
+*.tds
+
+# Backup files
+*.bak
+*.orig
+
+# Turbo C / Borland temporary files
+*.~*
+
+# macOS
+.DS_Store
