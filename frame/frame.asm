@@ -261,11 +261,35 @@ PrintFrame PROC
 	push bx
 	push dx
 
+	; fill_frame(x+1, y+1, height-2, width-2, frameChars[4], fillAttr)
+	mov ah, [fillAttr]
+	mov al, [frameChars + 4]
+	push ax					; 3rd arg: fill char (al) / attr (ah)
+
+	mov ah, bh
+	mov al, bl
+	sub ah, 2				; height - 2
+	sub al, 2				; width - 2
+	push ax					; 2nd arg: height-2 (->bh), width-2 (->bl)
+
+	mov ah, dh
+	mov al, dl
+	inc ah					; y + 1
+	inc al					; x + 1
+	push ax					; 1st arg: y+1 (->dh), x+1 (->dl)
+
+	call FillFrame			; clobbers AX BX CX DX DI ES;
+
+	; return right values after destroy in FillFrame
+	mov bx, [bp - 2]		; minus because they were pushed into the stack after the bp
+	mov dx, [bp - 4]
+
 	mov cx, [bp - 2]	; cx = bx
 	xor ch, ch		    ; ch = 0; cl = bl = width
 	sub cx, 2
 
 	mov al, [frameChars]
+	mov ah, [frameAttr]
 
 	call PrintCharAt
 
