@@ -2,15 +2,16 @@
 ; strlib.inc  -  Standard string library functions
 ;
 ; Functions:
-;   strlen  - calculate length of null-terminated string
-;   strchr  - find first occurrence of character in string
-;   strnchr - find first occurrence of character within N bytes
-;   strcmp  - compare two null-terminated strings
-;   strncmp - compare up to N bytes of two strings
-;   htoi     - convert hex ASCII string to 16-bit unsigned integer
-;   itoh     - convert 16-bit unsigned integer to hex ASCII string
-;   atoi    - convert decimal ASCII string to signed 16-bit integer
-;   itoa    - convert signed 16-bit integer to decimal ASCII string
+;   strlen    - calculate length of null-terminated string
+;   strchr    - find first occurrence of character in string
+;   strnchr   - find first occurrence of character within N bytes
+;   strcmp    - compare two null-terminated strings
+;   strncmp   - compare up to N bytes of two strings
+;   htoi      - convert hex ASCII string to 16-bit unsigned integer
+;   itoh      - convert 16-bit unsigned integer to hex ASCII string
+;   atoi      - convert decimal ASCII string to signed 16-bit integer
+;   itoa      - convert signed 16-bit integer to decimal ASCII string
+;   parse_psp - tokenize PSP command line in-place, return separator count
 ;
 ; Calling convention: register-based (no stack args)
 ;
@@ -563,3 +564,121 @@ itoa PROC
         pop  ax
         ret
 itoa ENDP
+
+
+; ============= PARSE_PSP ========================================================
+
+; Function to parse the PSP command line into null-terminated tokens in-place
+;
+; C equivalent:
+; int parse_psp() {
+;     char *ptr = 0x80; // 80h -
+;     uint8_t len = *ptr;
+;
+;     ptr += 2;
+;
+;     uint8_t count_of_args = 0;
+;
+;     char *space = ptr;
+;     do {
+;         space = strnchr(space, ' ', len);
+;
+;         if (space != NULL) {
+;             *space = '\0';
+;             ++count_of_args;
+;             ++space;
+;         }
+;     } while (space != NULL);
+;
+;     return count_of_args;
+; }
+;
+; Reads the raw command line at PSP offset 80h (length byte) and 82h onward
+; (first argument character, after the mandatory leading space at 81h).
+; Null-terminates the end of the command line (DS:[81h + len]), then replaces
+; each space separator with a null byte in-place, counting separators.
+;
+; PSP layout (DS = PSP segment; .COM programs have DS == PSP on entry):
+;   DS:80h  = byte: count of command-line characters (not including trailing CR)
+;   DS:81h  = first character (DOS always writes a leading space here)
+;   DS:82h+ = argument text; CR (0Dh) at DS:81h+len is overwritten with null
+;
+; After this call the command line region starting at DS:82h contains a series
+; of null-terminated tokens.  The first token is at DS:82h; each subsequent
+; token begins immediately after the null terminator of the previous one.
+;
+; Return value: number of space separators replaced, NOT the token count.
+;   0 separators => at most 1 token (at DS:82h) if the command line was non-empty
+;   n separators => n+1 tokens
+;
+; IN:
+;   DS = PSP segment  (.COM programs: DS == PSP on entry)
+; OUT:
+;   AX = number of space separators replaced with null
+; EXP:
+;   DirFlag is forward (0)
+; DESTR:
+;   BX, CX, DX, SI
+;
+parse_psp PROC
+        xor  dx, dx             ; dx = separator count = 0
+
+        ; Read PSP command-line length byte
+        mov  si, 80h            ; si -> PSP length byte
+        xor  cx, cx
+        mov  cl, [si]           ; cx = number of command-line characters
+        and  cx, cx             ; empty command line?
+        jz   @@done             ;   yes: return 0
+
+        add  si, 2              ; si = 82h  (first argument character)
+        dec  cx                 ; remaining = len - 1  (space at 81h accounted for)
+        jz   @@done             ; only a space existed -> return 0
+
+        ; Null-terminate the command line at DS:[si + cx] = DS:[82h + (len-1)]
+        ;   = DS:[81h + len]  (overwrites the CR byte; PSP is not zero-filled)
+        mov  bx, si
+        add  bx, cx             ; bx = 82h + (len-1) = CR position
+        mov  byte ptr [bx], 0   ; *(ptr + len) = '\0'
+
+        mov  bl, ' '            ; bl = space character  (strnchr preserves BL)
+
+@@loop:
+        ; strnchr(DS:SI, ' ', CX) -> AX = pointer to first space, or AX = 0
+        ; strnchr destroys: AX, CX, SI
+        push cx                 ; save remaining byte count
+        push si                 ; save start of current scan window
+        call strnchr
+
+        and  ax, ax             ; space found?
+        jz   @@restore_done     ;   no: done parsing
+
+        ; Space found at AX.  Restore saved registers.
+        pop  si                 ; si = start of scan window
+        pop  cx                 ; cx = bytes available when scan started
+
+        ; Subtract bytes consumed (from scan start up to and including the space)
+        push ax                 ; save found-space address
+        sub  ax, si             ; ax = offset of space from scan start
+        inc  ax                 ; ax = bytes consumed (through and including the space)
+        sub  cx, ax             ; cx -= bytes consumed
+        pop  ax                 ; ax = address of space byte
+
+        mov  byte ptr [ax], 0   ; replace space with null terminator
+        inc  dx                 ; ++separator_count
+
+        mov  si, ax
+        inc  si                 ; si = one byte past the null (start of next token)
+
+        and  cx, cx             ; any bytes remaining?
+        jnz  @@loop             ;   yes: continue search
+        jmp  @@done
+
+@@restore_done:
+        ; strnchr returned NULL; clean up the two values we pushed
+        pop  si                 ; } discard saved scan start
+        pop  cx                 ; }   and saved remaining count
+
+@@done:
+        mov  ax, dx             ; return value = separator count
+        ret
+parse_psp ENDP
