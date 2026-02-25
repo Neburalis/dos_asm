@@ -7,8 +7,8 @@
 ;   strnchr - find first occurrence of character within N bytes
 ;   strcmp  - compare two null-terminated strings
 ;   strncmp - compare up to N bytes of two strings
-;   hti     - convert hex ASCII string to 16-bit unsigned integer
-;   ith     - convert 16-bit unsigned integer to hex ASCII string
+;   htoi     - convert hex ASCII string to 16-bit unsigned integer
+;   itoh     - convert 16-bit unsigned integer to hex ASCII string
 ;
 ; Calling convention: register-based (no stack args)
 ;
@@ -24,7 +24,7 @@
 ; C equivalent:
 ;   size_t strlen(const char *str)
 ;
-; Algorithm:
+; Algoritohm:
 ;   Scan ES:DI forward for null byte with REPNE SCASB.
 ;   Recover length from the change in CX.
 ;
@@ -283,3 +283,133 @@ strncmp PROC
         pop  es
         ret
 strncmp ENDP
+
+
+; ============= HTOI ==========================================================
+
+; Function to convert a hex ASCII string to a 16-bit unsigned integer
+;
+; C equivalent:
+;   uint16_t htoi(const char *str)
+;
+; Accepts uppercase (A-F) and lowercase (a-f) hex digits.
+; Stops at the first non-hex character or null terminator.
+; No "0x" / "0X" prefix expected — raw hex digits only.
+; Overflow silently wraps to 16 bits.
+;
+; IN:
+;   DS:SI = pointer to hex ASCII string
+; OUT:
+;   AX = 16-bit unsigned value
+;   SI = points to the first non-hex character (or null terminator)
+; EXP:
+;   DirFlag is forward (0)
+; DESTR:
+;   BX
+;
+htoi PROC
+        xor  bx, bx             ; bx = result accumulator
+
+@@loop:
+        lodsb                   ; al = ds:[si++]
+
+        and  al, al
+        jz   @@done_undo        ; null terminator -> stop
+
+        sub  al, '0'
+        jb   @@done_undo        ; below '0' -> invalid
+
+        cmp  al, 9
+        jbe  @@got_nibble       ; '0'..'9' -> nibble 0..9
+
+        ; Check uppercase
+
+        sub  al, 'A' - '0'      ; shift: 'A'->0, 'F'->5
+        jb   @@done_undo        ; '9' < char < 'A' -> invalid
+
+        cmp  al, 5
+        jbe  @@hex              ; 'A'..'F' -> nibble 0..5
+
+        ; Check downcase
+
+        sub  al, 'a' - 'A'      ; shift: 'a'->0, 'f'->5
+        jb   @@done_undo        ; 'F' < char < 'a' -> invalid
+
+        cmp  al, 5
+        ja   @@done_undo        ; beyond 'f' -> invalid
+
+@@hex:
+        add  al, 10             ; A..F / a..f -> 10..15
+
+@@got_nibble:
+        shl  bx, 4              ; bx <<= 4\
+        xor  ah, ah             ; zero-extend AL -> AX
+        or   bx, ax             ; bx |= nibble
+
+        jmp  @@loop
+
+@@done_undo:
+        dec  si                 ; undo lodsb: SI -> first non-hex char / null
+        mov  ax, bx             ; ax = result
+        ret
+htoi ENDP
+
+
+; ============= ITOH ==========================================================
+
+; Function to convert a 16-bit unsigned integer to a 4-digit uppercase hex string
+;
+; C equivalent:
+;   void itoh(uint16_t value, char *buf)
+;   (buf must be at least 5 bytes: 4 hex digits + null terminator)
+;
+; Always emits exactly 4 uppercase hex digits + null terminator.
+; No "0x" / "0X" prefix is written.
+;
+; IN:
+;   AX    = 16-bit value to convert
+;   ES:DI = pointer to output buffer (>= 5 bytes)
+; OUT:
+;   ES:DI buffer filled: 4 uppercase hex digits + null terminator
+;   DI    = original DI + 5  (points one past the null terminator)
+; EXP:
+;   sizeof es:di >= 5
+; DESTR:
+;   BX, CX, DI
+;
+itoh PROC
+        push ax                 ; preserve caller's AX
+        push cx
+
+        mov  cx, 4              ; emit 4 nibbles, high -> low
+
+@@loop:
+        rol  ax, 1              ; bring next high nibble to bits 3..0
+        rol  ax, 1              ; (four 1-bit ROLs for 8086 compatibility)
+        rol  ax, 1
+        rol  ax, 1
+
+        mov  bl, al
+        and  bl, 0Fh            ; isolate nibble (0..15)
+
+        cmp  bl, 9
+        jbe  @@decimal
+        add  bl, 'A' - 10       ; 10..15 -> 'A'..'F'
+        jmp  @@store
+
+@@decimal:
+        add  bl, '0'            ; 0..9   -> '0'..'9'
+
+@@store:
+        mov  es:[di], bl
+        inc  di
+
+        loop @@loop             ; cx--; repeat if cx != 0
+
+        mov  byte ptr es:[di], 0 ; null terminator
+        inc  di                  ; DI points one past the null
+
+        pop  cx
+        pop  ax                 ; restore caller's AX
+        ret
+itoh ENDP
