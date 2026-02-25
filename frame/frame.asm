@@ -5,6 +5,9 @@ locals @@
 
 org 100h
 
+
+; ============= MACRO ========================================================+
+
 VideoMemorySeg 	equ 0b800h
 INCLUDE debug.inc
 
@@ -12,6 +15,34 @@ exit0 MACRO
 	mov ax, 4c00h
 	int 21h
 ENDM
+
+
+; ============= video_mem_offset ==============================================
+
+; Macro to compute video memory offset from DX coordinates
+;
+; IN:
+;	DH = line (Y) (0-24)
+;	DL = col  (X) (0-80)
+; OUT:
+;	AX = offset
+; DESTR:
+;	BX
+;
+video_mem_offset MACRO
+	mov al, dh						; al = y
+	mov ah, 80d						; ah = 80  (columns per row)
+	mul ah							; ax = y * 80  (row start, in characters)
+	mov bx, dx						; bx = dx  (copy DX to extract DL cleanly)
+	xor bh, bh						; bh = 0 → bx = dl = x
+	add ax, bx						; ax = y * 80 + x  (cell index)
+	shl ax, 1						; ax *= 2  (each cell = 1 byte char + 1 byte attr)
+ENDM
+
+; =============================================================================
+
+
+; ============= MAIN ========================================================
 
 Start:
 
@@ -28,9 +59,9 @@ Start:
 	mov dh, 5d
 	mov dl, 2d
 
-	mov bl, ds:[80h]	; bl = len(cl)
-	add bl, 3d
-	mov bh, 5d
+	mov bl, ds:[80h]	; bl = PSP[80h] = command-line length (includes leading space before args)
+	add bl, 3d			; bl = frame width: cmd-len + left border + right border + 1 padding
+	mov bh, 5d			; bh = frame height = 5 rows
 
 	BkPt
 
@@ -53,25 +84,10 @@ Start:
 
 	exit0
 
-; Macro to compute video memory offset from DX coordinates
-;
-; IN:
-;	DH = line (Y) (0-24)
-;	DL = col  (X) (0-80)
-; OUT:
-;	AX = offset
-; DESTR:
-;	BX
-;
-calc_offset MACRO
-	mov al, dh						; al = y
-	mov ah, 80d						; ah = 80
-	mul ah							; ax = ah * al
-	mov bx, dx						; bx = dx
-	xor bh, bh						; bh = 0 ; bx = dl
-	add ax, bx						; ax += x
-	shl ax, 1						; ax *= 2
-ENDM
+; =============================================================================
+
+
+; ============= PrintCharAt ===================================================
 
 ; Function to print symbol AL (color in AH) on screen at coordinates in DX
 ;
@@ -89,19 +105,23 @@ ENDM
 ;
 PrintCharAt PROC
 	push ax
-	calc_offset
+	video_mem_offset
 
 	mov bx, ax						; bx = ax
 	pop ax
 
-	mov word ptr es:[bx], ax		; M[es * 16 + bx] = ah; M[es * 16 + bx + 1] = al
+	mov word ptr es:[bx], ax
+	; es:[bx] = al (char),  es:[bx+1] = ah (attr)  — little-endian word write
 
 	ret
 PrintCharAt ENDP
 
+
+; ============= PrintHLine ====================================================
+
 ; Function to print a horizontal line of CX symbols starting at coordinates DX with symbol AX
 ;
-; Also prints right-to-left if DirFlag = down (STD)
+; Direction-aware: CLD → left-to-right (DI += 2 per char),  STD → right-to-left (DI -= 2 per char)
 ;
 ; IN:
 ;	DH = line (Y) (0-24)
@@ -118,7 +138,7 @@ PrintCharAt ENDP
 ;
 PrintHLine PROC
 	push ax
-	calc_offset
+	video_mem_offset
 
 	mov di, ax
 	pop ax
@@ -127,6 +147,9 @@ PrintHLine PROC
 
 	ret
 PrintHLine ENDP
+
+
+; ============= PrintVLine ====================================================
 
 ; Function to print a vertical line of CX symbols starting at coordinates DX with symbol AX
 ;
@@ -143,14 +166,14 @@ PrintHLine ENDP
 ;
 PrintVLine PROC
 	push ax
-	calc_offset
+	video_mem_offset
 
 	mov di, ax
 	pop ax
 
-	@@loop:							; while (cx--) es[di] = ax; di += 160
+	@@loop:							; while (cx--) { es:[di] = ax;  di += 160 (next row) }
 		mov word ptr es:[di], ax
-		add di, 160d
+		add di, 160d				; 80 columns × 2 bytes/column = 160 bytes per row
 		dec cx
 
 		; cmp cx, 0
@@ -158,6 +181,9 @@ PrintVLine PROC
 
 	ret
 PrintVLine ENDP
+
+
+; ============= PrintIVLine ===================================================
 
 ; Function to print a vertical line of CX symbols going upward from starting coordinates DX
 ;
@@ -174,14 +200,14 @@ PrintVLine ENDP
 ;
 PrintIVLine PROC
 	push ax
-	calc_offset
+	video_mem_offset
 
 	mov di, ax
 	pop ax
 
-	@@loop:							; while (cx--) es[di] = ax; di += 160
+	@@loop:							; while (cx--) { es:[di] = ax;  di -= 160 (prev row) }
 		mov word ptr es:[di], ax
-		sub di, 160d
+		sub di, 160d				; 80 columns × 2 bytes/column = 160 bytes per row
 		dec cx
 
 		; cmp cx, 0
@@ -189,6 +215,9 @@ PrintIVLine PROC
 
 	ret
 PrintIVLine ENDP
+
+
+; ============= PrintFrame ====================================================
 
 ; Function to print a rectangular frame, characters taken from array in DataSegment
 ;
@@ -208,7 +237,6 @@ PrintIVLine ENDP
 ; 	AX, CX, DX, DI
 ;	DirFlag
 ;
-PrintFrame PROC
 ;
 ; Logic of function in C:
 ;
@@ -255,8 +283,14 @@ PrintFrame PROC
 ;	 print_cmd_args(x + 2, y + 2, argc, argv);
 ; }
 ;
+PrintFrame PROC
 	push bp
 	mov bp, sp
+	; Stack frame after next two pushes:
+	;   [bp-2] = BX  (BH = height,  BL = width)
+	;   [bp-4] = DX  (DH = Y,       DL = X    )
+	;   [bp]   = saved BP
+	;   [bp+2] = return address
 
 	push bx
 	push dx
@@ -280,97 +314,98 @@ PrintFrame PROC
 
 	call FillFrame			; clobbers AX BX CX DX DI ES;
 
-	; return right values after destroy in FillFrame
-	mov bx, [bp - 2]		; minus because they were pushed into the stack after the bp
-	mov dx, [bp - 4]
+	; FillFrame clobbered BX and DX — restore from stack frame
+	mov bx, [bp - 2]		; bx = saved BX  (BH = height, BL = width)
+	mov dx, [bp - 4]		; dx = saved DX  (DH = Y,      DL = X    )
 
-	mov cx, [bp - 2]	; cx = bx
-	xor ch, ch		    ; ch = 0; cl = bl = width
-	sub cx, 2
+	mov cx, [bp - 2]	; cx = [BH:BL] = [height:width]
+	xor ch, ch		    ; ch = 0 → cx = cl = BL = width
+	sub cx, 2			; cx = width - 2  (inner horizontal line length, excl. corners)
 
 	mov al, [frameChars]
 	mov ah, [frameAttr]
 
 	call PrintCharAt
 
-	inc dl
-	; Start at X+1, Y
+	inc dl				; dl = X + 1
+	; → position: (X+1, Y)
 
 	mov al, [frameChars + 1]
 
 	cld
 	call PrintHLine
 
-	mov cx, [bp - 2]	; cx = bx
-	mov cl, ch		; cl = ch = bh = height
-	xor ch, ch		; ch = 0 ; cx = height
-	sub cx, 2
+	mov cx, [bp - 2]	; cx = [BH:BL] = [height:width]
+	mov cl, ch			; cl = CH = BH = height  (move height down into CL)
+	xor ch, ch			; ch = 0 → cx = height
+	sub cx, 2			; cx = height - 2  (inner vertical line length, excl. corners)
 
-	dec dl
-	inc dh
-	; Start at X, Y+1
+	dec dl				; dl = X
+	inc dh				; dh = Y + 1
+	; → position: (X, Y+1)
 
 	mov al, [frameChars + 3]
 
 	call PrintVLine
 
-	; Go to X+Width-1, Y+Height-1
+	; Navigate from (X, Y+1) to the start of the lower horizontal line.
+	; CX still holds [height:width] from the load above.
+	mov cx, [bp - 2]	; cx = [BH:BL] = [height:width]
+	add dh, ch			; dh = (Y+1) + height
+	add dl, cl			; dl = X     + width
 
-	mov cx, [bp - 2]	; cx = bx
-	add dh, ch		; (y+1) += height
-	add dl, cl		; x     += width
+	sub dh, 2			; dh = Y + height - 1  (bottom row)
+	sub dl, 2			; dl = X + width  - 2  (rightmost inner col; STD prints leftward)
+	; → position: (X+width-2, Y+height-1)
 
-	sub dh, 2		; y = Y + height - 1
-	sub dl, 2		; x = X + width  - 2
-
-	xor ch, ch		; ch = 0; cl = bl = width
-	sub cx, 2
+	xor ch, ch			; ch = 0 → cx = cl = BL = width
+	sub cx, 2			; cx = width - 2  (inner horizontal line length, excl. corners)
 
 	mov al, [frameChars + 7]
 
 	std
 	call PrintHLine
 
-	mov cx, [bp - 2]	; cx = bx
-	mov cl, ch		; cl = ch = bh = height
-	xor ch, ch		; ch = 0 ; cx = height
-	sub cx, 2
+	mov cx, [bp - 2]	; cx = [BH:BL] = [height:width]
+	mov cl, ch			; cl = CH = BH = height  (move height down into CL)
+	xor ch, ch			; ch = 0 → cx = height
+	sub cx, 2			; cx = height - 2  (inner vertical line length, excl. corners)
 
-	inc dl
-	dec dh
-	; Start at y = Y + height - 2; x = X + width - 1
+	inc dl				; dl = X + width - 1  (right column)
+	dec dh				; dh = Y + height - 2  (one row above bottom)
+	; → position: (X+width-1, Y+height-2);  PrintIVLine draws upward
 
 	mov al, [frameChars + 5]
 
 	call PrintIVLine
 
-	; at y = Y + height - 1; x = X + width - 1
-	inc dh
+	; PrintIVLine left DH at Y+1 — advance back down to bottom row
+	inc dh				; dh = Y + height - 1
+	; → position: (X+width-1, Y+height-1)
 
 	mov al, [frameChars + 8]
 
 	call PrintCharAt
 
-	push dx
+	push dx					; save DX = (X+width-1, Y+height-1)
 
-	mov dl, [bp - 4]	; x = X
+	mov dl, [bp - 4]		; dl = original X  ([bp-4] = low byte of saved DX = saved DL)
 	mov al, [frameChars + 6]
 
-	call PrintCharAt
+	call PrintCharAt		; lower-left corner at (X, Y+height-1)
 
-	pop dx
+	pop dx					; restore DX = (X+width-1, Y+height-1)
 
-	mov dh, [bp - 3]	; y = Y
+	mov dh, [bp - 3]		; dh = original Y  ([bp-3] = high byte of saved DX = saved DH)
 	mov al, [frameChars + 2]
 
 	call PrintCharAt
 
-	pop dx
+	pop dx					; dx = original start (DH = Y, DL = X)  — first push dx above
+	add dh, 2				; dh = Y + 2  (skip top border row + one padding row)
+	add dl, 2				; dl = X + 2  (skip left border col + one padding col)
 
-	add dh, 2
-	add dl, 2
-
-	call PrintCMDLine
+	call PrintCMDLine		; print command-line args inside the frame
 
 	pop bx
 
@@ -378,13 +413,24 @@ PrintFrame PROC
 	ret
 PrintFrame ENDP
 
+
+; ============= FillFrame =====================================================
+
 ; Function to fill rectangle with spaces
 ;
-; Args in stack (pascal), 3 words, callee cleans:
+; Args pushed by caller (Pascal convention — callee cleans with RET 6):
+;
+;   Stack layout on entry (after PUSH BP / MOV BP,SP inside function):
+;   [bp+8] = fill word   (AH = color attr,  AL = fill character)
+;   [bp+6] = size word   (BH = height,      BL = width          )
+;   [bp+4] = origin word (DH = Y,           DL = X              )
+;   [bp+2] = return address
+;   [bp]   = saved BP
+;
 ; IN:
-;	stack[0] = DH: line Y (0-24),  DL: col X (0-80)
-;	stack[2] = BH: Height,          BL: Width
-;	stack[4] = symbol to fill (low byte - symbol, high byte - attribute)
+;	[bp+4]: DH = line Y (0-24),  DL = col X (0-80)
+;	[bp+6]: BH = height,          BL = width
+;	[bp+8]: AH = color attribute, AL = fill character
 ; OUT:
 ;	-
 ; EXP:
@@ -412,8 +458,11 @@ FillFrame PROC
 	jnz @@loop
 
 	pop bp
-	ret 6
+	ret 6					; pop 3 caller words (6 bytes) off stack  (Pascal convention)
 FillFrame ENDP
+
+
+; ============= PrintCMDLine ==================================================
 
 ; Print command line at coordinates DX, with attribute AH
 ; IN:
@@ -422,6 +471,8 @@ FillFrame ENDP
 ;	textAttr - color attribute of text
 ; OUT:
 ;	-
+; EXP:
+;	ES = b800h
 ; DESTR:
 ; 	DirFlag
 ;
@@ -431,19 +482,23 @@ PrintCMDLine PROC
 	push bx
 	push ax
 
-	calc_offset
+	video_mem_offset
 
 	mov di, ax
+	; PSP layout (always at DS:0000 in COM programs):
+	;   DS:[80h]  — byte: total command-line length, counting the leading space before args
+	;   DS:[81h]  — space character (separator before first arg)
+	;   DS:[82h+] — actual argument characters, not null-terminated
 	mov si, 80h
 
 	; xor bx, bx
-	mov bl, ds:[si]
+	mov bl, ds:[si]			; bl = PSP[80h] = cmd-line length  (includes leading space)
 
 	pop ax
 	push ax
 
-	dec bl
-	add si, 2
+	dec bl					; bl--: subtract the leading space → bl = number of arg chars
+	add si, 2				; si = 82h: skip length byte (80h) and leading space (81h) → first arg char
 
 	mov ah, [textAttr]
 	cld
@@ -467,6 +522,11 @@ PrintCMDLine PROC
 	pop di
 	ret
 PrintCMDLine ENDP
+
+; =============================================================================
+
+
+; ============= DATA SEGMENT ==================================================
 
 .data
 
