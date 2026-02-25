@@ -21,5 +21,6 @@
 # Turbo C / Borland temporary files
 *.~*
 
-# macOS
-.DS_Store
+# IDE
+.vscode
+.idea
