@@ -9,6 +9,8 @@
 ;   strncmp - compare up to N bytes of two strings
 ;   htoi     - convert hex ASCII string to 16-bit unsigned integer
 ;   itoh     - convert 16-bit unsigned integer to hex ASCII string
+;   atoi    - convert decimal ASCII string to signed 16-bit integer
+;   itoa    - convert signed 16-bit integer to decimal ASCII string
 ;
 ; Calling convention: register-based (no stack args)
 ;
@@ -413,3 +415,151 @@ itoh PROC
         pop  ax                 ; restore caller's AX
         ret
 itoh ENDP
+
+
+; ============= ATOI ===========================================================
+
+; Function to convert a decimal ASCII string to a signed 16-bit integer
+;
+; C equivalent:
+;   int atoi(const char *str)
+;
+; Accepts an optional leading '+' or '-' sign followed by decimal digits.
+; Stops at the first non-digit character or null terminator.
+; No whitespace skipping. Overflow silently wraps to 16 bits.
+;
+; IN:
+;   DS:SI = pointer to decimal ASCII string
+; OUT:
+;   AX = signed 16-bit integer
+;   SI = points to the first non-digit character (or null terminator)
+; EXP:
+;   -
+; DESTR:
+;   AX, BX, CX, DX
+;
+atoi PROC
+        xor  bx, bx             ; bx = accumulator
+        xor  dh, dh             ; dh = sign flag (0=positive, 1=negative)
+
+        lodsb                   ; peek at first character: possible sign
+        cmp  al, '-'
+        je   @@minus
+        cmp  al, '+'
+        je   @@loop             ; consume '+', start reading digits
+        dec  si                 ; not a sign: put char back
+
+        jmp  @@loop
+
+@@minus:
+        mov  dh, 1              ; flag: negate result at end
+                                ; fall through to @@loop
+@@loop:
+        lodsb                   ; al = ds:[si++]
+        xor  ah, ah
+        sub  al, '0'
+        jb   @@done_undo        ; below '0' -> stop
+        cmp  al, 9
+        ja   @@done_undo        ; above '9' -> stop
+
+        ; bx = bx * 10 + digit
+        ; bx * 10 = (bx << 3) + (bx << 1)
+        mov  cx, ax             ; cx = digit
+        mov  ax, bx
+        shl  ax, 1              ; ax = bx * 2
+        shl  bx, 3              ; bx = bx * 8
+        add  bx, ax             ; bx = bx * 10
+        add  bx, cx             ; bx = bx * 10 + digit
+
+        jmp  @@loop
+
+@@done_undo:
+        dec  si                 ; undo lodsb: SI -> first non-digit / null
+        and  dh, dh
+        jz   @@done
+        neg  bx                 ; apply sign
+
+@@done:
+        mov  ax, bx
+        ret
+atoi ENDP
+
+
+; ============= ITOA ===========================================================
+
+; Function to convert a signed 16-bit integer to a decimal ASCII string
+;
+; C equivalent:
+;   char *itoa(int value, char *buf, 10)
+;   (buf must be at least 7 bytes: sign + 5 digits + null terminator)
+;
+; Produces the shortest representation with no leading zeros.
+; Handles the full signed range -32768 .. 32767.
+;
+; IN:
+;   AX    = signed 16-bit integer to convert
+;   ES:DI = pointer to output buffer (>= 7 bytes)
+; OUT:
+;   ES:DI buffer filled with decimal string + null terminator
+;   DI    = original DI + written length + 1  (one past the null)
+; EXP:
+;   AX  (value preserved)
+; DESTR:
+;   BX, CX, DX, DI
+;
+itoa PROC
+        push ax
+        push bx
+        push cx
+        push dx
+
+        ; Emit '-' and take absolute value for negative numbers
+        test ax, ax
+        jns  @@abs
+        mov  byte ptr es:[di], '-'
+        inc  di
+        neg  ax                 ; ax = |value|
+                                ; note: neg 0x8000 wraps to 0x8000, but
+                                ;       0x8000 unsigned = 32768 — correct abs value
+
+@@abs:
+        ; Special-case zero (DIV loop would emit nothing)
+        test ax, ax
+        jz   @@zero
+
+        ; Divide by 10 repeatedly, push remainders (digits) onto stack
+        ; in least-significant-first order; pop to write most-significant-first
+        mov  bx, 10
+        xor  cx, cx             ; cx = digit count
+
+@@div:
+        xor  dx, dx             ; zero-extend AX for DIV
+        div  bx                 ; AX = AX / 10,  DX = AX % 10  (remainder = next digit)
+        push dx                 ; save digit (in reverse order)
+        inc  cx
+        test ax, ax
+        jnz  @@div
+
+@@write:
+        pop  dx
+        add  dl, '0'
+        mov  es:[di], dl
+        inc  di
+        loop @@write
+
+        jmp  @@null_term
+
+@@zero:
+        mov  byte ptr es:[di], '0'
+        inc  di
+
+@@null_term:
+        mov  byte ptr es:[di], 0 ; null terminator
+        inc  di
+
+        pop  dx
+        pop  cx
+        pop  bx
+        pop  ax
+        ret
+itoa ENDP
