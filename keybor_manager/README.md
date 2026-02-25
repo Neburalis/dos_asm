@@ -11,7 +11,7 @@ An educational project exploring interrupt-driven keyboard handling in DOS. Inst
   - Reads the scancode from port `60h` into `AL`
   - Writes `AX` (scancode + attribute `4Eh`) to a **fixed cell**: row 3, column 40 (`BX = (80×3 + 40)×2 = 560`)
   - Acknowledges the keyboard by toggling bit 7 of PPI port `61h`
-  - Sends **EOI** (`20h → port 20h`) to the master PIC
+  - Sends **EOI** (`20h -> port 20h`) to the master PIC
   - Returns with `IRET`
 
 ## Internal Routines
@@ -37,8 +37,8 @@ test.com
 
 ```asm
 VideoMemorySeg  equ 0B800h   ; CGA/VGA color text-mode segment
-                              ; AH = 4Eh  → yellow on red attribute
-                              ; Fixed cell: row 3, col 40 → offset 560 (BX = (80*3+40)*2)
+                              ; AH = 4Eh  -> yellow on red attribute
+                              ; Fixed cell: row 3, col 40 -> offset 560 (BX = (80*3+40)*2)
 ```
 
 > `debug.inc` must be present in the same directory. Set `Debug equ 0` to strip breakpoints from the build.

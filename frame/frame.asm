@@ -34,7 +34,7 @@ video_mem_offset MACRO
 	mov ah, 80d						; ah = 80  (columns per row)
 	mul ah							; ax = y * 80  (row start, in characters)
 	mov bx, dx						; bx = dx  (copy DX to extract DL cleanly)
-	xor bh, bh						; bh = 0 → bx = dl = x
+	xor bh, bh						; bh = 0 -> bx = dl = x
 	add ax, bx						; ax = y * 80 + x  (cell index)
 	shl ax, 1						; ax *= 2  (each cell = 1 byte char + 1 byte attr)
 ENDM
@@ -121,7 +121,7 @@ PrintCharAt ENDP
 
 ; Function to print a horizontal line of CX symbols starting at coordinates DX with symbol AX
 ;
-; Direction-aware: CLD → left-to-right (DI += 2 per char),  STD → right-to-left (DI -= 2 per char)
+; Direction-aware: CLD -> left-to-right (DI += 2 per char),  STD -> right-to-left (DI -= 2 per char)
 ;
 ; IN:
 ;	DH = line (Y) (0-24)
@@ -319,7 +319,7 @@ PrintFrame PROC
 	mov dx, [bp - 4]		; dx = saved DX  (DH = Y,      DL = X    )
 
 	mov cx, [bp - 2]	; cx = [BH:BL] = [height:width]
-	xor ch, ch		    ; ch = 0 → cx = cl = BL = width
+	xor ch, ch		    ; ch = 0 -> cx = cl = BL = width
 	sub cx, 2			; cx = width - 2  (inner horizontal line length, excl. corners)
 
 	mov al, [frameChars]
@@ -328,7 +328,7 @@ PrintFrame PROC
 	call PrintCharAt
 
 	inc dl				; dl = X + 1
-	; → position: (X+1, Y)
+	; -> position: (X+1, Y)
 
 	mov al, [frameChars + 1]
 
@@ -337,12 +337,12 @@ PrintFrame PROC
 
 	mov cx, [bp - 2]	; cx = [BH:BL] = [height:width]
 	mov cl, ch			; cl = CH = BH = height  (move height down into CL)
-	xor ch, ch			; ch = 0 → cx = height
+	xor ch, ch			; ch = 0 -> cx = height
 	sub cx, 2			; cx = height - 2  (inner vertical line length, excl. corners)
 
 	dec dl				; dl = X
 	inc dh				; dh = Y + 1
-	; → position: (X, Y+1)
+	; -> position: (X, Y+1)
 
 	mov al, [frameChars + 3]
 
@@ -356,9 +356,9 @@ PrintFrame PROC
 
 	sub dh, 2			; dh = Y + height - 1  (bottom row)
 	sub dl, 2			; dl = X + width  - 2  (rightmost inner col; STD prints leftward)
-	; → position: (X+width-2, Y+height-1)
+	; -> position: (X+width-2, Y+height-1)
 
-	xor ch, ch			; ch = 0 → cx = cl = BL = width
+	xor ch, ch			; ch = 0 -> cx = cl = BL = width
 	sub cx, 2			; cx = width - 2  (inner horizontal line length, excl. corners)
 
 	mov al, [frameChars + 7]
@@ -368,12 +368,12 @@ PrintFrame PROC
 
 	mov cx, [bp - 2]	; cx = [BH:BL] = [height:width]
 	mov cl, ch			; cl = CH = BH = height  (move height down into CL)
-	xor ch, ch			; ch = 0 → cx = height
+	xor ch, ch			; ch = 0 -> cx = height
 	sub cx, 2			; cx = height - 2  (inner vertical line length, excl. corners)
 
 	inc dl				; dl = X + width - 1  (right column)
 	dec dh				; dh = Y + height - 2  (one row above bottom)
-	; → position: (X+width-1, Y+height-2);  PrintIVLine draws upward
+	; -> position: (X+width-1, Y+height-2);  PrintIVLine draws upward
 
 	mov al, [frameChars + 5]
 
@@ -381,7 +381,7 @@ PrintFrame PROC
 
 	; PrintIVLine left DH at Y+1 — advance back down to bottom row
 	inc dh				; dh = Y + height - 1
-	; → position: (X+width-1, Y+height-1)
+	; -> position: (X+width-1, Y+height-1)
 
 	mov al, [frameChars + 8]
 
@@ -497,8 +497,8 @@ PrintCMDLine PROC
 	pop ax
 	push ax
 
-	dec bl					; bl--: subtract the leading space → bl = number of arg chars
-	add si, 2				; si = 82h: skip length byte (80h) and leading space (81h) → first arg char
+	dec bl					; bl--: subtract the leading space -> bl = number of arg chars
+	add si, 2				; si = 82h: skip length byte (80h) and leading space (81h) -> first arg char
 
 	mov ah, [textAttr]
 	cld

@@ -21,7 +21,7 @@ FRAME [text]
 
 | Routine | Description |
 |---------|-------------|
-| `calc_offset` (macro) | Converts (col, row) → byte offset in video memory |
+| `calc_offset` (macro) | Converts (col, row) -> byte offset in video memory |
 | `PrintCharAt` | Write a single character+attribute at (col, row) |
 | `PrintHLine` | Write N characters horizontally (uses `rep stosw`) |
 | `PrintVLine` | Write N characters downward (stride = 160 bytes/row) |
