@@ -67,7 +67,17 @@ Start:
 ; 				psp += 2;
 ; 				textcolor = htoi(psp);
 ; 				break;
-; 			default:C
+;			case 's':
+;				psp +=2;
+;				strcpy(frameChars, psp);
+;				break;
+;			case '':
+;				psp += 2;
+;				uint8_t style = *psp - '0';
+;				if (style > 3) break;
+;				strcpy(frameChars, styleTable + 9*style);
+;				break;
+; 			default:
 ; 				break;
 ; 		}
 ; 	}
