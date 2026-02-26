@@ -1,22 +1,41 @@
 # frame
 
-An educational project exploring direct video memory access in DOS. Draws a rectangular bordered frame on screen by writing directly to CGA/VGA video memory (segment `B800h`).
+An educational project exploring direct video memory access in DOS. Draws a rectangular bordered frame on screen by writing directly to video memory (segment `B800h`).
 
 ## Usage
 
 ```
-FRAME [-b <attr>] [-f <attr>] [-t <attr>] [-s <style>] [-o <9chars>] [text]
+FRAME [-b<attr>] [-f<attr>] [-t<attr>] [-s<style>] text
 ```
+
+<p>
+<details>
+  <summary>Click to show examples</summary>
+    Without additional params
+    <img src="../assets/images/frame-example-kbcr.png" alt="Without additional params">
+    Change colors to custom
+    <img src="../assets/images/frame-example-kbin.png" alt="Change colors">
+    Change style
+    <img src="../assets/images/frame-example-kblh.png" alt="Change style">
+    Set custom style
+    <img src="../assets/images/frame-example-kbqv.png" alt="Custom style">
+</details>
+</p>
 
 *All arguments are read from the PSP command-line buffer at `DS:80h`. Flags must precede the text.*
 
+All flags are optional.
+
 | Flag | Controls | Default |
 |------|----------|---------|
-| `-b <attr>` | Fill (background) color attribute | `0Eh` — yellow on black |
+| `-b <attr>` | Fill color attribute | `0Eh` — yellow on black |
 | `-f <attr>` | Frame border color attribute | `4Eh` — yellow on red |
 | `-t <attr>` | Text color attribute | `0Eh` — yellow on black |
 | `-s <style>` | Border style from standard list (see below) | `2` — double-line |
-| `-o <9chars>` | Custom border characters (9 raw chars: TL T TR L fill R BL B BR) | — |
+
+Frame color - attribute for frame (attribute is color of symbols and background)
+Fill color - attribute for fill of frame
+Text color - attribute for text
 
 `<attr>` is a two-digit hex value (e.g. `1F` for white on blue). Parsed by `htoi` from `strlib.inc`.
 
@@ -28,8 +47,9 @@ FRAME [-b <attr>] [-f <attr>] [-t <attr>] [-s <style>] [-o <9chars>] [text]
 | `1` | Single-line | `┌─┐│ │└─┘` |
 | `2` | Double-line (default) | `╔═╗║ ║╚═╝` |
 | `3` | Hearts | `♥♥♥♥ ♥♥♥♥` |
+| `*` | Custom | parse next 9 raw chars (TL T TR L fill R BL B BR)|
 
-## What It Does
+## What Code Does
 
 - Sets `ES = B800h` (text-mode video memory)
 - Parses optional `-b`, `-f`, `-t`, `-s`, `-o` flags from the PSP command line
@@ -77,3 +97,4 @@ styleTable  ; 4 rows × 9 bytes — loaded into frameChars by -s flag
 ;  2: double-line   ╔═╗║ ║╚═╝  (CP437: C9h CDh BBh BAh 20h BAh C8h CDh BCh)
 ;  3: hearts        ♥♥♥♥ ♥♥♥♥  (CP437: 03h × 8, 20h fill)
 ```
+

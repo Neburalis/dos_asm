@@ -56,23 +56,23 @@ Start:
 ; 		++psp;
 ; 		switch (*psp) {
 ; 			case 'b':
-; 				psp += 2;
+; 				psp += 1;
 ; 				background = htoi(psp);
 ; 				break;
 ; 			case 'f':
-; 				psp += 2;
+; 				psp += 1;
 ; 				framecolor = htoi(psp);
 ; 				break;
 ; 			case 't':
-; 				psp += 2;
+; 				psp += 1;
 ; 				textcolor = htoi(psp);
 ; 				break;
 ;			case 's':
-;				psp +=2;
-;				strcpy(frameChars, psp);
-;				break;
-;			case '':
-;				psp += 2;
+;				psp += 1;
+;				if (*psp == '*') {
+;					strcpy(frameChars, psp);
+;					break;
+;				}
 ;				uint8_t style = *psp - '0';
 ;				if (style > 3) break;
 ;				strcpy(frameChars, styleTable + 9*style);
@@ -101,7 +101,7 @@ ArgLoop:
 
 	inc  si					; si -> flag char
 	mov  al, ds:[si]		; al = flag char
-	add  si, 2				; si -> space after "-x" ; si -> start of value token (e.g. "4E")
+	inc  si 				; si -> start of value token (e.g. "4E")
 
 	cmp  al, 'b'
 	je   FlagB
@@ -109,8 +109,6 @@ ArgLoop:
 	je   FlagF
 	cmp  al, 't'
 	je   FlagT
-	cmp  al, 'o'
-	je   FlagO
 	cmp  al, 's'
 	je   FlagS
 	jmp  ArgDone			; unknown flag -> stop, treat rest as text
@@ -133,9 +131,14 @@ FlagT: ; text attr
 	inc  si
 	jmp  ArgLoop
 
-FlagO: ; Outline from 9 chars
+FlagS: ; Standard styles: 0=spaces, 1=single-line, 2=double-line, 3=hearts
+	lodsb				; mov al, ds:[si] ; inc si
+	cmp al, '*'
+	jne @@s_default
+; s_custom
 	mov di, offset frameChars
 	mov cx, 9
+
 @@sloop:
 	lodsb 				; mov al, ds:[si] ; inc si
 	mov [di], al
@@ -145,8 +148,7 @@ FlagO: ; Outline from 9 chars
 	inc si				; skip trailing space -> next token
 	jmp ArgLoop
 
-FlagS: ; Standard styles: 0=spaces, 1=single-line, 2=double-line, 3=hearts
-	lodsb				; mov al, ds:[si] ; inc si
+@@s_default:
 	sub  al, '0'		; ASCII digit -> integer
 	cmp  al, 3
 	ja   @@s_skip		; out of range -> ignore
@@ -427,7 +429,7 @@ PrintFrame PROC
 	inc al					; x + 1
 	push ax					; 1st arg: y+1 (->dh), x+1 (->dl)
 
-	call FillFrame			; clobbers AX BX CX DX DI ES;
+	call FillFrame
 
 	; FillFrame clobbered BX and DX — restore from stack frame
 	mov bx, [bp - 2]		; bx = saved BX  (BH = height, BL = width)
