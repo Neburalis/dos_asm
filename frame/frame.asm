@@ -6,7 +6,6 @@ locals @@
 org 100h
 
 INCLUDE debug.inc
-; INCLUDE strlib.inc
 
 ; ============= MACRO ========================================================+
 
@@ -47,46 +46,114 @@ ENDM
 
 Start:
 
+; Algoritohm in C:
+; psp += 2;
+;
+; // Parse params
+; do {
+; 	if (*psp == '-') {
+; 		++psp;
+; 		switch (*psp) {
+; 			case 'b':
+; 				psp += 2;
+; 				background = htoi(psp);
+; 				break;
+; 			case 'f':
+; 				psp += 2;
+; 				framecolor = htoi(psp);
+; 				break;
+; 			case 't':
+; 				psp += 2;
+; 				textcolor = htoi(psp);
+; 				break;
+; 			default:C
+; 				break;
+; 		}
+; 	}
+; 	else break;
+; } while (*psp != 0);
+;
+; printFrame();
+; PrintLine(psp);
+
 	mov ax, VideoMemorySeg
 	mov es, ax
 
-	; mov bx, offset frameChars
+	; === Parse command-line flags: -b <attr>  -f <attr>  -t <attr> ===
+	mov si, 82h				; si -> first arg char in raw PSP
 
-	; xor bx, bx			; bx = 0, comment because on start its 0
+ArgLoop:
+	cmp  byte ptr ds:[si], 0	; end of token stream?
+	je   ArgDone
+	cmp  byte ptr ds:[si], '-'	; flag token?
+	jne  ArgDone
 
-	; mov al, '$'
-	mov ah, 4eh
+	inc  si					; si -> flag char
+	mov  al, ds:[si]		; al = flag char
+	add  si, 2				; si -> space after "-x" ; si -> start of value token (e.g. "4E")
 
-	mov dh, 5d
-	mov dl, 2d
+	cmp  al, 'b'
+	je   FlagB
+	cmp  al, 'f'
+	je   FlagF
+	cmp  al, 't'
+	je   FlagT
+	jmp  ArgDone			; unknown flag -> stop, treat rest as text
 
-	mov bl, ds:[80h]	; bl = PSP[80h] = command-line length (includes leading space before args)
-	add bl, 3d			; bl = frame width: cmd-len + left border + right border + 1 padding
-	mov bh, 5d			; bh = frame height = 5 rows
+FlagB:
+	call htoi				; AX = attribute value,  SI -> space after value
+	mov  [fillAttr], al
+	inc  si					; si -> next flag or text
+	jmp  ArgLoop
+
+FlagF:
+	call htoi
+	mov  [frameAttr], al
+	inc  si
+	jmp  ArgLoop
+
+FlagT:
+	call htoi
+	mov  [textAttr], al
+	inc  si
+	jmp  ArgLoop
+
+ArgDone:
+	; SI = pointer to text token in raw PSP (space-separated, CR-terminated)
+
+	; === Set up frame dimensions ===
+	mov bl, ds:[80h]		; bl = PSP cmd-line length (includes leading space)
+	add bx, 82h
+	sub bx, si
+	mov bh, 5d				; bh = frame height = 5 rows
+	add bl, 3d				; bl = frame width: cmd-len + borders + padding
+
+	; === Set up frame position ===
 
 	BkPt
 
-	call PrintFrame
+	mov al, bl
+	shr al, 1
+	mov dl, 40d
+	sub dl, al
+	mov dh, 5d
 
-; 	inc dh
-; 	inc dl
-;
-; 	mov al, 176d
-;
-; 	sub bl, 2d
-; 	sub bh, 2d
-;
-; 	call PrintFrame
-;
-; 	inc dh
-; 	inc dl
+	BkPt
 
-	; call PrintString
+	push si					; save text pointer across PrintFrame
+	call PrintFrame			; draw borders and fill
+
+	pop  si					; restore text pointer
+	add  dh, 2				; dh = Y + 2  (inside-frame row: skip top border + padding row)
+	add  dl, 2				; dl = X + 2  (inside-frame col: skip left border + padding col)
+	mov  ah, [textAttr]
+	call PrintLine			; print text inside the frame
 
 	exit0
 
 ; =============================================================================
 
+INCLUDE strlib.inc
 
 ; ============= PrintCharAt ===================================================
 
@@ -280,8 +347,6 @@ PrintIVLine ENDP
 ;    // Upper right corner
 ;    print_char_at(x + width - 1, y, frame_chars[2], frame_attr);
 ;
-;	 // Print args
-;	 print_line(x + 2, y + 2, cmd_args_ptr, text_attr);
 ; }
 ;
 PrintFrame PROC
@@ -402,19 +467,8 @@ PrintFrame PROC
 
 	call PrintCharAt
 
-	pop dx					; dx = original start (DH = Y, DL = X)  — first push dx above
-	add dh, 2				; dh = Y + 2  (skip top border row + one padding row)
-	add dl, 2				; dl = X + 2  (skip left border col + one padding col)
-
-	; Null-terminate PSP command-line string, then call PrintString
-	xor bh, bh
-	mov bl, ds:[80h]		; bl = PSP[80h] = cmd-line length (includes leading space)
-	mov byte ptr ds:[bx + 81h], 0	; overwrite CR with null at end of args
-	mov si, 82h				; si = DS:82h = first arg character
-	mov ah, [textAttr]		; ah = text color attribute
-	call PrintString			; print command-line args inside the frame
-
-	pop bx
+	pop dx					; balance initial push dx  (DX restored to entry value)
+	pop bx					; balance initial push bx  (BX restored to entry value)
 
 	pop bp
 	ret
@@ -469,14 +523,15 @@ FillFrame PROC
 FillFrame ENDP
 
 
-; ============= PrintString ===================================================
+; ============= PrintLine ===================================================
 
-; Print a null-terminated string at screen coordinates DX
+; Print a string at screen coordinates DX, stopping at any control char (< 20h)
+; Handles both null-terminated strings and raw PSP args (CR-terminated).
 ;
 ; IN:
 ;	DH = line (Y) (0-24)
 ;	DL = col  (X) (0-80)
-;	DS:SI = pointer to null-terminated string
+;	DS:SI = pointer to string (null / CR / any ctrl-char terminated)
 ;	AH    = color attribute
 ; OUT:
 ;	-
@@ -486,7 +541,7 @@ FillFrame ENDP
 ;	AX, BX, DI, SI
 ;   DirFlag
 ;
-PrintString PROC
+PrintLine PROC
 	push ax
 	video_mem_offset
 
@@ -497,21 +552,19 @@ PrintString PROC
 
 	@@loop:
 		lodsb				; al = ds:[si++]
-		or al, al			; null terminator?
-		jz @@done
+		cmp al, 20h			; stop at any control char (null, CR, etc.)
+		jb @@done
 		stosw				; es:[di+=2] = ax  (al = char, ah = attr)
 	jmp @@loop
 
 	@@done:
 	ret
-PrintString ENDP
+PrintLine ENDP
 
 ; =============================================================================
 
 
 ; ============= DATA SEGMENT ==================================================
-
-.data
 
 db 'DATA'
 
