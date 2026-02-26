@@ -5,7 +5,7 @@ An educational project exploring direct video memory access in DOS. Draws a rect
 ## Usage
 
 ```
-FRAME [-b <attr>] [-f <attr>] [-t <attr>] [text]
+FRAME [-b <attr>] [-f <attr>] [-t <attr>] [-s <style>] [-o <9chars>] [text]
 ```
 
 *All arguments are read from the PSP command-line buffer at `DS:80h`. Flags must precede the text.*
@@ -15,15 +15,26 @@ FRAME [-b <attr>] [-f <attr>] [-t <attr>] [text]
 | `-b <attr>` | Fill (background) color attribute | `0Eh` — yellow on black |
 | `-f <attr>` | Frame border color attribute | `4Eh` — yellow on red |
 | `-t <attr>` | Text color attribute | `0Eh` — yellow on black |
+| `-s <style>` | Border style from standard list (see below) | `2` — double-line |
+| `-o <9chars>` | Custom border characters (9 raw chars: TL T TR L fill R BL B BR) | — |
 
 `<attr>` is a two-digit hex value (e.g. `1F` for white on blue). Parsed by `htoi` from `strlib.inc`.
+
+### `-s` style values
+
+| Value | Style | Characters |
+|-------|-------|------------|
+| `0` | No frame | spaces |
+| `1` | Single-line | `┌─┐│ │└─┘` |
+| `2` | Double-line (default) | `╔═╗║ ║╚═╝` |
+| `3` | Hearts | `♥♥♥♥ ♥♥♥♥` |
 
 ## What It Does
 
 - Sets `ES = B800h` (text-mode video memory)
-- Parses optional `-b`, `-f`, `-t` color flags from the PSP command line
+- Parses optional `-b`, `-f`, `-t`, `-s`, `-o` flags from the PSP command line
 - Determines frame width from the remaining text length
-- Draws a double-line box (╔═╗ / ║ ║ / ╚═╝) using box-drawing characters (CP437)
+- Draws a bordered box using characters from `frameChars` (CP437)
 - Fills the interior with the fill character and `fillAttr`
 - Prints the text string inside the frame using `textAttr`
 - Frame is horizontally centered on the 80-column screen
@@ -59,4 +70,10 @@ frameChars  db 0C9h, 0CDh, 0BBh, 0BAh, 020h, 0BAh, 0C8h, 0CDh, 0BCh
 frameAttr   db 4Eh   ; yellow on red   (overridden by -f)
 fillAttr    db 0Eh   ; yellow on black (overridden by -b)
 textAttr    db 0Eh   ; yellow on black (overridden by -t)
+
+styleTable  ; 4 rows × 9 bytes — loaded into frameChars by -s flag
+;  0: spaces        (no visible border)
+;  1: single-line   ┌─┐│ │└─┘  (CP437: DAh C4h BFh B3h 20h B3h C0h C4h D9h)
+;  2: double-line   ╔═╗║ ║╚═╝  (CP437: C9h CDh BBh BAh 20h BAh C8h CDh BCh)
+;  3: hearts        ♥♥♥♥ ♥♥♥♥  (CP437: 03h × 8, 20h fill)
 ```

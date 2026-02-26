@@ -6,6 +6,7 @@ locals @@
 org 100h
 
 INCLUDE debug.inc
+Debug			equ 1
 
 ; ============= MACRO =========================================================
 
@@ -98,24 +99,62 @@ ArgLoop:
 	je   FlagF
 	cmp  al, 't'
 	je   FlagT
+	cmp  al, 'o'
+	je   FlagO
+	cmp  al, 's'
+	je   FlagS
 	jmp  ArgDone			; unknown flag -> stop, treat rest as text
 
-FlagB:
+FlagB: ; backgrount attr
 	call htoi				; AX = attribute value,  SI -> space after value
 	mov  [fillAttr], al
 	inc  si					; si -> next flag or text
 	jmp  ArgLoop
 
-FlagF:
+FlagF: ; frame attr
 	call htoi
 	mov  [frameAttr], al
 	inc  si
 	jmp  ArgLoop
 
-FlagT:
+FlagT: ; text attr
 	call htoi
 	mov  [textAttr], al
 	inc  si
+	jmp  ArgLoop
+
+FlagO: ; Outline from 9 chars
+	mov di, offset frameChars
+	mov cx, 9
+@@sloop:
+	lodsb 				; mov al, ds:[si] ; inc si
+	mov [di], al
+	inc di
+	dec cx
+	jnz @@sloop
+	inc si				; skip trailing space -> next token
+	jmp ArgLoop
+
+FlagS: ; Standard styles: 0=spaces, 1=single-line, 2=double-line, 3=hearts
+	lodsb				; mov al, ds:[si] ; inc si
+	sub  al, '0'		; ASCII digit -> integer
+	cmp  al, 3
+	ja   @@s_skip		; out of range -> ignore
+	xor  ah, ah
+	mov  bl, 9
+	mul  bl				; ax = style * 9  (byte offset into styleTable)
+	add  ax, offset styleTable	; ax = &styleTable[style]
+	mov  bx, ax
+	mov  di, offset frameChars
+	mov  cx, 9
+@@s_copy:
+	mov  al, [bx]
+	mov  [di], al
+	inc  bx
+	inc  di
+	loop @@s_copy
+@@s_skip:
+	inc  si				; skip trailing space -> next token
 	jmp  ArgLoop
 
 ArgDone:
@@ -566,12 +605,18 @@ PrintLine ENDP
 
 ; ============= DATA SEGMENT ==================================================
 .data
-
-db 'DATA'
+DATA
 
 frameChars	db 0c9h, 0cdh, 0bbh, 0bah, 020h, 0bah, 0c8h, 0cdh, 0bch
 frameAttr	db 4eh
 fillAttr	db 0eh
 textAttr	db 0eh
+
+; styleTable: 4 rows × 9 bytes  (style chars: TL, T, TR, L, fill, R, BL, B, BR)
+styleTable:
+	db 020h,020h,020h,020h,020h,020h,020h,020h,020h	; 0: no frame (spaces)
+	db 0DAh,0C4h,0BFh,0B3h,020h,0B3h,0C0h,0C4h,0D9h	; 1: single-line
+	db 0C9h,0CDh,0BBh,0BAh,020h,0BAh,0C8h,0CDh,0BCh	; 2: double-line
+	db 003h,003h,003h,003h,020h,003h,003h,003h,003h	; 3: hearts
 
 end Start
