@@ -5,11 +5,12 @@ locals @@
 
 org 100h
 
+INCLUDE debug.inc
+; INCLUDE strlib.inc
 
 ; ============= MACRO ========================================================+
 
 VideoMemorySeg 	equ 0b800h
-INCLUDE debug.inc
 
 exit0 MACRO
 	mov ax, 4c00h
@@ -80,7 +81,7 @@ Start:
 ; 	inc dh
 ; 	inc dl
 
-	; call PrintCMDLine
+	; call PrintString
 
 	exit0
 
@@ -280,7 +281,7 @@ PrintIVLine ENDP
 ;    print_char_at(x + width - 1, y, frame_chars[2], frame_attr);
 ;
 ;	 // Print args
-;	 print_cmd_args(x + 2, y + 2, argc, argv);
+;	 print_line(x + 2, y + 2, cmd_args_ptr, text_attr);
 ; }
 ;
 PrintFrame PROC
@@ -405,7 +406,13 @@ PrintFrame PROC
 	add dh, 2				; dh = Y + 2  (skip top border row + one padding row)
 	add dl, 2				; dl = X + 2  (skip left border col + one padding col)
 
-	call PrintCMDLine		; print command-line args inside the frame
+	; Null-terminate PSP command-line string, then call PrintString
+	xor bh, bh
+	mov bl, ds:[80h]		; bl = PSP[80h] = cmd-line length (includes leading space)
+	mov byte ptr ds:[bx + 81h], 0	; overwrite CR with null at end of args
+	mov si, 82h				; si = DS:82h = first arg character
+	mov ah, [textAttr]		; ah = text color attribute
+	call PrintString			; print command-line args inside the frame
 
 	pop bx
 
@@ -462,66 +469,42 @@ FillFrame PROC
 FillFrame ENDP
 
 
-; ============= PrintCMDLine ==================================================
+; ============= PrintString ===================================================
 
-; Print command line at coordinates DX, with attribute AH
+; Print a null-terminated string at screen coordinates DX
+;
 ; IN:
 ;	DH = line (Y) (0-24)
 ;	DL = col  (X) (0-80)
-;	textAttr - color attribute of text
+;	DS:SI = pointer to null-terminated string
+;	AH    = color attribute
 ; OUT:
 ;	-
 ; EXP:
 ;	ES = b800h
 ; DESTR:
-; 	DirFlag
+;	AX, BX, DI, SI
+;   DirFlag
 ;
-PrintCMDLine PROC
-	push di
-	push si
-	push bx
+PrintString PROC
 	push ax
-
 	video_mem_offset
 
 	mov di, ax
-	; PSP layout (always at DS:0000 in COM programs):
-	;   DS:[80h]  — byte: total command-line length, counting the leading space before args
-	;   DS:[81h]  — space character (separator before first arg)
-	;   DS:[82h+] — actual argument characters, not null-terminated
-	mov si, 80h
-
-	; xor bx, bx
-	mov bl, ds:[si]			; bl = PSP[80h] = cmd-line length  (includes leading space)
-
 	pop ax
-	push ax
 
-	dec bl					; bl--: subtract the leading space -> bl = number of arg chars
-	add si, 2				; si = 82h: skip length byte (80h) and leading space (81h) -> first arg char
-
-	mov ah, [textAttr]
 	cld
 
 	@@loop:
+		lodsb				; al = ds:[si++]
+		or al, al			; null terminator?
+		jz @@done
+		stosw				; es:[di+=2] = ax  (al = char, ah = attr)
+	jmp @@loop
 
-		lodsb; al = ds:[si++]
-		stosw; es:[di+=2] = ax
-
-		; mov byte ptr es:[di], [textAttr]
-
-		; inc di
-		dec bl
-
-		; cmp bx, 0
-	jne @@loop
-
-	pop ax
-	pop bx
-	pop si
-	pop di
+	@@done:
 	ret
-PrintCMDLine ENDP
+PrintString ENDP
 
 ; =============================================================================
 
