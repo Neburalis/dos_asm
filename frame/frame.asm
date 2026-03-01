@@ -305,190 +305,105 @@ PrintIVLine ENDP
 
 ; ============= PrintFrame ====================================================
 
-; Function to print a rectangular frame, characters taken from array in DataSegment
+; Draws a bordered rectangle directly into VGA text memory. All rendering is
+; inline using rep stosw; no helper procedure calls.
 ;
 ; IN:
 ;	DH   = Ystart (0-24)
 ;	DL   = Xstart (0-80)
-;	BH   = Height
-;	BL   = Width
-;	frameChars	- array of chars to print frame
-;	frameAttr	- color attribute for frame
-;	fillAttr	- color attribute for frame fill
+;	BH   = Height (>= 2)
+;	BL   = Width  (>= 2)
+;	frameChars	- 9-byte array: TL, top, TR, L, fill, R, BL, bot, BR
+;	frameAttr	- color attribute for border characters
+;	fillAttr	- color attribute for interior fill
 ; OUT:
 ;	-
 ; EXP:
 ;	ES = b800h
 ; DESTR:
-; 	AX, CX, DX, DI
+;	AX, CX, SI, DI
 ;	DirFlag
 ;
-;
-; Logic of function in C:
-;
-; //  frameChars[9]:
-; //    [0]= [1]=═ [2]=╗
-; //    [3]=║           [5]=║
-; //    [6]=╚ [7]=═ [8]=╝
-; //  frameAttr  - color attribute of frame
-; //  fillAttr   - color attribute of fill (unused in current function)
-;
-; void print_frame(byte x,				byte y,
-;                  byte width,			byte height,
-;                  byte frame_chars[9],
-;                  byte frame_attr,		byte fill_attr)
-; {
-;	 // Fill background
-;	 fill_frame(x+1, y+1, height-2, width-2, frame_chars[4], fill_attr);
-;
-;    // Upper left corner
-;    print_char_at(x, y, frame_chars[0], frame_attr);
-;
-;    // Upper horizontal  (X+1 .. X+width-2)
-;    print_hline(x + 1, y, width - 2, frame_chars[1], frame_attr);
-;
-;    // Left vertical  (Y+1 .. Y+height-2)
-;    print_vline(x, y + 1, height - 2, frame_chars[3], frame_attr);
-;
-;    // Right vertical
-;    print_vline(x + width - 1, y + 1, height - 2, frame_chars[5], frame_attr);
-;
-;    // Lower horizontal
-;    print_hline(x + 1, y + height - 1, width - 2, frame_chars[7], frame_attr);
-;
-;    // Lower right corner
-;    print_char_at(x + width - 1, y + height - 1, frame_chars[8], frame_attr);
-;
-;    // Lower left corner
-;    print_char_at(x, y + height - 1, frame_chars[6], frame_attr);
-;
-;    // Upper right corner
-;    print_char_at(x + width - 1, y, frame_chars[2], frame_attr);
-;
-; }
-;
 PrintFrame PROC
-	push bp
-	mov bp, sp
-	; Stack frame after next two pushes:
-	;   [bp-2] = BX  (BH = height,  BL = width)
-	;   [bp-4] = DX  (DH = Y,       DL = X    )
-	;   [bp]   = saved BP
-	;   [bp+2] = return address
+	cld
 
+	; --- Compute DI = video memory offset of top-left corner ---
 	push bx
-	push dx
+	video_mem_offset			; IN: DH=Y, DL=X  OUT: AX=(DH*80+DL)*2  DESTR: BX
+	pop bx
+	mov di, ax
 
-	; fill_frame(x+1, y+1, height-2, width-2, frameChars[4], fillAttr)
-	mov ah, [fillAttr]
-	mov al, [frameChars + 4]
-	push ax					; 3rd arg: fill char (al) / attr (ah)
-
-	mov ah, bh
-	mov al, bl
-	sub ah, 2				; height - 2
-	sub al, 2				; width - 2
-	push ax					; 2nd arg: height-2 (->bh), width-2 (->bl)
-
-	mov ah, dh
-	mov al, dl
-	inc ah					; y + 1
-	inc al					; x + 1
-	push ax					; 1st arg: y+1 (->dh), x+1 (->dl)
-
-	call FillFrame
-
-	; FillFrame clobbered BX and DX — restore from stack frame
-	mov bx, [bp - 2]		; bx = saved BX  (BH = height, BL = width)
-	mov dx, [bp - 4]		; dx = saved DX  (DH = Y,      DL = X    )
-
-	mov cx, [bp - 2]	; cx = [BH:BL] = [height:width]
-	xor ch, ch		    ; ch = 0 -> cx = cl = BL = width
-	sub cx, 2			; cx = width - 2  (inner horizontal line length, excl. corners)
-
-	mov al, [frameChars]
 	mov ah, [frameAttr]
 
-	call PrintCharAt
+	; --- Top row ---
 
-	inc dl				; dl = X + 1
-	; -> position: (X+1, Y)
+	mov al, [frameChars]		; [0] TL corner
+	stosw						; es:[di+=2] = ax
 
-	mov al, [frameChars + 1]
+	mov al, [frameChars+1]		; [1] top border
+	xor ch, ch
+	mov cl, bl
+	sub cx, 2					; cx = width - 2
+	rep stosw
 
-	cld
-	call PrintHLine
+	mov al, [frameChars+2]		; [2] TR corner
+	stosw
+	; DI now sits width*2 bytes past the top-left corner
 
-	mov cx, [bp - 2]	; cx = [BH:BL] = [height:width]
-	mov cl, ch			; cl = CH = BH = height  (move height down into CL)
-	xor ch, ch			; ch = 0 -> cx = height
-	sub cx, 2			; cx = height - 2  (inner vertical line length, excl. corners)
+	; Precompute row advance: 160 - width*2
+	; After writing a full row of width chars the cursor is width*2 bytes past
+	; the row's left col; adding (160 - width*2) steps it to the same col on
+	; the next row (160 = 80 cols * 2 bytes/cell).
+	xor ch, ch
+	mov cl, bl
+	shl cx, 1					; cx = width * 2
+	mov si, 160
+	sub si, cx					; si = 160 - width*2
 
-	dec dl				; dl = X
-	inc dh				; dh = Y + 1
-	; -> position: (X, Y+1)
+	; --- Middle rows: height-2 iterations ---
+	mov cl, bh
+	xor ch, ch
+	sub cx, 2					; cx = height - 2
 
-	mov al, [frameChars + 3]
+@@mid_loop:
+	add di, si					; advance DI to left border of next row
 
-	call PrintVLine
+	mov al, [frameChars+3]		; [3] left border
+	mov ah, [frameAttr]
+	stosw
 
-	; Navigate from (X, Y+1) to the start of the lower horizontal line.
-	; CX still holds [height:width] from the load above.
-	mov cx, [bp - 2]	; cx = [BH:BL] = [height:width]
-	add dh, ch			; dh = (Y+1) + height
-	add dl, cl			; dl = X     + width
+	mov al, [frameChars+4]		; [4] fill char
+	mov ah, [fillAttr]
+	push cx						; save row loop counter
+	xor ch, ch
+	mov cl, bl
+	sub cx, 2					; cx = width - 2
+	rep stosw					; fill interior
+	pop cx						; restore row loop counter
 
-	sub dh, 2			; dh = Y + height - 1  (bottom row)
-	sub dl, 2			; dl = X + width  - 2  (rightmost inner col; STD prints leftward)
-	; -> position: (X+width-2, Y+height-1)
+	mov al, [frameChars+5]		; [5] right border
+	mov ah, [frameAttr]
+	stosw
 
-	xor ch, ch			; ch = 0 -> cx = cl = BL = width
-	sub cx, 2			; cx = width - 2  (inner horizontal line length, excl. corners)
+	loop @@mid_loop
 
-	mov al, [frameChars + 7]
+	; --- Bottom row ---
+	add di, si					; same advance (si = 160 - width*2, still valid)
 
-	std
-	call PrintHLine
+	mov ah, [frameAttr]
 
-	mov cx, [bp - 2]	; cx = [BH:BL] = [height:width]
-	mov cl, ch			; cl = CH = BH = height  (move height down into CL)
-	xor ch, ch			; ch = 0 -> cx = height
-	sub cx, 2			; cx = height - 2  (inner vertical line length, excl. corners)
+	mov al, [frameChars+6]		; [6] BL corner
+	stosw
 
-	inc dl				; dl = X + width - 1  (right column)
-	dec dh				; dh = Y + height - 2  (one row above bottom)
-	; -> position: (X+width-1, Y+height-2);  PrintIVLine draws upward
+	mov al, [frameChars+7]		; [7] bottom border
+	xor ch, ch
+	mov cl, bl
+	sub cx, 2					; cx = width - 2
+	rep stosw
 
-	mov al, [frameChars + 5]
+	mov al, [frameChars+8]		; [8] BR corner
+	stosw
 
-	call PrintIVLine
-
-	; PrintIVLine left DH at Y+1 — advance back down to bottom row
-	inc dh				; dh = Y + height - 1
-	; -> position: (X+width-1, Y+height-1)
-
-	mov al, [frameChars + 8]
-
-	call PrintCharAt
-
-	push dx					; save DX = (X+width-1, Y+height-1)
-
-	mov dl, [bp - 4]		; dl = original X  ([bp-4] = low byte of saved DX = saved DL)
-	mov al, [frameChars + 6]
-
-	call PrintCharAt		; lower-left corner at (X, Y+height-1)
-
-	pop dx					; restore DX = (X+width-1, Y+height-1)
-
-	mov dh, [bp - 3]		; dh = original Y  ([bp-3] = high byte of saved DX = saved DH)
-	mov al, [frameChars + 2]
-
-	call PrintCharAt
-
-	pop dx					; balance initial push dx  (DX restored to entry value)
-	pop bx					; balance initial push bx  (BX restored to entry value)
-
-	pop bp
 	ret
 PrintFrame ENDP
 

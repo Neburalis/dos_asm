@@ -1,100 +1,111 @@
 # frame
 
-An educational project exploring direct video memory access in DOS. Draws a rectangular bordered frame on screen by writing directly to video memory (segment `B800h`).
+An educational DOS assembly project (TASM). The program draws a rectangular bordered frame with text directly into video memory — no libraries, just raw writes to segment `B800h`.
 
-## Usage
+> **What's the point?** This project demonstrates how DOS text-mode video works: every character on screen is two bytes in memory (character code + color attribute). The program writes there directly, bypassing all system calls.
+
+## Quick Start
+
+### Build
 
 ```
-FRAME [-b<attr>] [-f<attr>] [-t<attr>] [-s<style>] text
+tasm /la /Ipath/to/folder/libs/ frame.asm
+tlink /t frame.obj
 ```
 
-<p>
-<details>
-  <summary>Click to show examples</summary>
-    Without additional params
-    <img src="../assets/images/frame-example-kbcr.png" alt="Without additional params">
-    Change colors to custom
-    <img src="../assets/images/frame-example-kbin.png" alt="Change colors">
-    Change style
-    <img src="../assets/images/frame-example-kblh.png" alt="Change style">
-    Set custom style
-    <img src="../assets/images/frame-example-kbqv.png" alt="Custom style">
-</details>
-</p>
+This produces `frame.com`, which runs in DOS or DOSBox.
 
-*All arguments are read from the PSP command-line buffer at `DS:80h`. Flags must precede the text.*
+> you should replace path/to/folder/ with the correct path to the repository (In my case: /IS:\DOC\DOS_ASM\LIBS\).
 
-All flags are optional.
+### Run
+
+```
+frame.com [flags] text
+```
+
+Examples:
+
+```
+frame.com Hello!
+frame.com -f1F -b07 -s1 Hello World
+```
+
+## Command-Line Flags
+
+All flags are optional and must come **before** the text.
 
 | Flag | Controls | Default |
 |------|----------|---------|
-| `-b <attr>` | Fill color attribute | `0Eh` — yellow on black |
-| `-f <attr>` | Frame border color attribute | `4Eh` — yellow on red |
-| `-t <attr>` | Text color attribute | `0Eh` — yellow on black |
-| `-s <style>` | Border style from standard list (see below) | `2` — double-line |
+| `-b<color>` | Fill color inside the frame | `0E` — yellow on black |
+| `-f<color>` | Frame border color | `4E` — yellow on red |
+| `-t<color>` | Text color inside the frame | `0E` — yellow on black |
+| `-s<style>` | Border style (see below) | `2` — double-line |
 
-Frame color - attribute for frame (attribute is color of symbols and background)
-Fill color - attribute for fill of frame
-Text color - attribute for text
+**How to specify a color (`<color>`)?**
+It's a two-digit hex value: the high nibble is the background color, the low nibble is the foreground (text) color. For example, `1F` = white text on blue background, `4E` = yellow on red. Search for "CGA color attributes" for a full color table.
 
-`<attr>` is a two-digit hex value (e.g. `1F` for white on blue). Parsed by `htoi` from `strlib.inc`.
+## Border Styles (`-s`)
 
-### `-s` style values
-
-| Value | Style | Characters |
-|-------|-------|------------|
-| `0` | No frame | spaces |
+| Value | Description | Characters |
+|-------|-------------|------------|
+| `0` | No border | (space fill only) |
 | `1` | Single-line | `┌─┐│ │└─┘` |
 | `2` | Double-line (default) | `╔═╗║ ║╚═╝` |
 | `3` | Hearts | `♥♥♥♥ ♥♥♥♥` |
-| `*` | Custom | parse next 9 raw chars (TL T TR L fill R BL B BR)|
+| `*` | Custom | Follow `*` with exactly 9 characters: top-left, top, top-right, left, fill, right, bottom-left, bottom, bottom-right |
 
-## What Code Does
+Custom style example: `-s*+-+| |+-+` draws a frame made of `+` and `-`.
 
-- Sets `ES = B800h` (text-mode video memory)
-- Parses optional `-b`, `-f`, `-t`, `-s`, `-o` flags from the PSP command line
-- Determines frame width from the remaining text length
-- Draws a bordered box using characters from `frameChars` (CP437)
-- Fills the interior with the fill character and `fillAttr`
-- Prints the text string inside the frame using `textAttr`
-- Frame is horizontally centered on the 80-column screen
+## Examples
 
-## Internal Routines
+<p>
+<details>
+  <summary>Show screenshots</summary>
+
+  Without additional parameters
+  <img src="../assets/images/frame-example-kbcr.png" alt="Without additional params">
+
+  Custom colors
+  <img src="../assets/images/frame-example-kbin.png" alt="Custom colors">
+
+  Different border style
+  <img src="../assets/images/frame-example-kblh.png" alt="Different style">
+
+  Custom style
+  <img src="../assets/images/frame-example-kbqv.png" alt="Custom style">
+</details>
+</p>
+
+## How It Works
+
+1. Reads arguments from the PSP command-line buffer at `DS:80h`.
+2. Parses the `-b`, `-f`, `-t`, `-s` flags.
+3. Measures the text length — this determines the frame width.
+4. Sets `ES = B800h` (the DOS text-mode video memory address).
+5. Draws the frame and fill by writing character + color attribute pairs directly into video memory.
+6. Prints the text centered inside the frame.
+
+The frame is automatically **horizontally centered** on the 80-column screen.
+
+## Code Structure
 
 | Routine | Description |
 |---------|-------------|
-| `video_mem_offset` (macro) | Converts (col, row) → byte offset in video memory (`y*160 + x*2`) |
-| `PrintCharAt` | Write a single character+attribute at (col, row) |
-| `PrintHLine` | Write N characters horizontally (uses `rep stosw`); direction-aware (CLD/STD) |
-| `PrintVLine` | Write N characters downward (stride = 160 bytes/row) |
-| `PrintIVLine` | Write N characters upward (stride = −160 bytes/row) |
-| `PrintFrame` | Draw a complete rectangular frame with corners, edges, and filled interior |
-| `FillFrame` | Fill a rectangle with a given character+attribute (Pascal calling convention, `ret 6`) |
-| `PrintLine` | Write a string to video memory, stopping at any control character (< `20h`) |
+| `video_mem_offset` (macro) | Converts (col, row) coordinates to a video memory offset: `y×160 + x×2` |
+| `PrintCharAt` | Writes a single character with an attribute at a given position |
+| `PrintHLine` | Draws a horizontal line of N characters (using `rep stosw`) |
+| `PrintVLine` | Draws a vertical line downward (stride = 160 bytes/row) |
+| `PrintIVLine` | Draws a vertical line upward |
+| `PrintFrame` | Draws a complete frame: corners, edges, and fill |
+| `FillFrame` | Fills a rectangle with a given character and attribute |
+| `PrintLine` | Writes a string to video memory, stopping at the first control character |
 
-## Build
+## Default Data
 
 ```
-tasm /la frame.asm
-tlink /t frame.obj
-frame.com [text]
+╔═══════╗
+║ text  ║
+╚═══════╝
 ```
 
-Requires `strlib.inc` (for `htoi`) and `debug.inc` on the include path.
-
-## Data
-
-```asm
-frameChars  db 0C9h, 0CDh, 0BBh, 0BAh, 020h, 0BAh, 0C8h, 0CDh, 0BCh
-;              ╔      ═      ╗     ║  (fill)  ║      ╚     ═     ╝
-frameAttr   db 4Eh   ; yellow on red   (overridden by -f)
-fillAttr    db 0Eh   ; yellow on black (overridden by -b)
-textAttr    db 0Eh   ; yellow on black (overridden by -t)
-
-styleTable  ; 4 rows × 9 bytes — loaded into frameChars by -s flag
-;  0: spaces        (no visible border)
-;  1: single-line   ┌─┐│ │└─┘  (CP437: DAh C4h BFh B3h 20h B3h C0h C4h D9h)
-;  2: double-line   ╔═╗║ ║╚═╝  (CP437: C9h CDh BBh BAh 20h BAh C8h CDh BCh)
-;  3: hearts        ♥♥♥♥ ♥♥♥♥  (CP437: 03h × 8, 20h fill)
-```
-
+Frame characters are stored in the `frameChars` array (CP437 encoding) and can be replaced via the `-s` flag.
