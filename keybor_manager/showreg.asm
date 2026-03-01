@@ -22,6 +22,8 @@ Start:
 
 	call PrintFrame
 
+	add dh, 2
+	add dl, 2
     mov si, offset string
 
     call PrintString
