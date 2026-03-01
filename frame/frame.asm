@@ -6,41 +6,8 @@ locals @@
 org 100h
 
 INCLUDE debug.inc
+INCLUDE utils.inc
 Debug			equ 1
-
-; ============= MACRO =========================================================
-
-VideoMemorySeg 	equ 0b800h
-
-exit0 MACRO
-	mov ax, 4c00h
-	int 21h
-ENDM
-
-
-; ============= video_mem_offset ==============================================
-
-; Macro to compute video memory offset from DX coordinates
-;
-; IN:
-;	DH = line (Y) (0-24)
-;	DL = col  (X) (0-80)
-; OUT:
-;	AX = offset
-; DESTR:
-;	BX
-;
-video_mem_offset MACRO
-	mov al, dh						; al = y
-	mov ah, 80d						; ah = 80  (columns per row)
-	mul ah							; ax = y * 80  (row start, in characters)
-	mov bx, dx						; bx = dx  (copy DX to extract DL cleanly)
-	xor bh, bh						; bh = 0 -> bx = dl = x
-	add ax, bx						; ax = y * 80 + x  (cell index)
-	shl ax, 1						; ax *= 2  (each cell = 1 byte char + 1 byte attr)
-ENDM
-
-; =============================================================================
 
 
 ; ============= MAIN ==========================================================

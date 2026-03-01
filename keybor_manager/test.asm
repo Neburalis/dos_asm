@@ -5,25 +5,9 @@ locals @@
 
 org 100h
 
-VideoMemorySeg 	equ 0b800h
 INCLUDE debug.inc
-
-; ============= MACRO =========================================================
-
-exit0 MACRO
-	mov ax, 4c00h
-	int 21h
-ENDM
-
-tasr0 MACRO
-    mov ax, 3100h
-    mov dx, offset EOP  ; size of program
-    shr dx, 4           ; size in paragraphs ; 1 paragraph = 16 byte
-    inc dx              ; the size may not be divided entirely
-    int 21h
-ENDM
-
-; =============================================================================
+INCLUDE utils.inc
+Debug			equ 1
 
 
 ; ============= MAIN ==========================================================
@@ -45,7 +29,7 @@ Start:
     int 21h
     sti
 
-    tasr0
+    tras0
 
 ; =============================================================================
 
