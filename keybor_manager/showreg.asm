@@ -6,49 +6,346 @@ locals @@
 org 100h
 
 INCLUDE utils.inc
-INCLUDE debug.inc
-Debug			equ 1
 
-; --- Minimal demo entry point ---
-; Remove / replace with your own caller.
+; ============= Window geometry ================================================
+WIN_ROW     equ 1           ; top row (0-based)
+WIN_COL     equ 63          ; left col (0-based)
+WIN_W       equ 11          ; total width  including borders
+WIN_H       equ 15          ; total height including borders
+WIN_BYTES   equ WIN_W * WIN_H * 2          ; buffer size in bytes
+
+WIN_VSTART  equ (WIN_ROW * 80 + WIN_COL) * 2   ; video offset of top-left cell
+WIN_STRIDE  equ (80 - WIN_W) * 2               ; per-row gap in video memory
+
+FRAME_ATTR  equ 4Eh         ; yellow on red     — border
+FILL_ATTR   equ 0Fh         ; bright white on black — interior
+
+; ============= Hex display macros ============================================
+;
+; ToHexDigit: convert nibble in BL (0–15) to ASCII hex char in BL.
+; No labels — safe for multiple expansions inside the same PROC.
+ToHexDigit MACRO
+    add bl, '0'
+    cmp bl, '9'+1
+    jl  $+5             ; 7C 03      — skip add bl,7 when already a digit
+    add bl, 7           ;  80 C3 07  — bridge '9' → 'A' for values 10–15
+ENDM
+
+; WriteRegHex: write AX as 4 hex chars into buf in memory.
+; IN:
+;   AX - reg to show
+; EXP:
+;   ES:DI - pointer where need to draw
+; DESTR:
+;   BL
+;
+WriteRegHex MACRO reg_row
+    mov di, offset draw_buf + ((reg_row) * WIN_W + 5) * 2
+    rol ax, 4
+    mov bl, al
+    and bl, 0Fh
+    ToHexDigit
+    mov byte ptr es:[di], bl
+    add di, 2
+    rol ax, 4
+    mov bl, al
+    and bl, 0Fh
+    ToHexDigit
+    mov byte ptr es:[di], bl
+    add di, 2
+    rol ax, 4
+    mov bl, al
+    and bl, 0Fh
+    ToHexDigit
+    mov byte ptr es:[di], bl
+    add di, 2
+    rol ax, 4
+    mov bl, al
+    and bl, 0Fh
+    ToHexDigit
+    mov byte ptr es:[di], bl
+ENDM
+
+; ============= Start ==========================================================
 Start:
-	mov ax, VideoMemorySeg
-	mov es, ax				; ES = B800h
+    ; --- Save and install INT 08h (timer) ---
+    mov ax, 3508h
+    int 21h
+    mov word ptr cs:[old_int08_ptr],   bx
+    mov word ptr cs:[old_int08_ptr+2], es
 
-	mov dh, 5				; Y = top row 5
-	mov dl, 10				; X = left col 10
-	mov bh, 7				; height = 7 rows
-	mov bl, 40				; width  = 40 cols
+    push cs
+    pop ds
+    mov ax, 2508h
+    mov dx, offset NewInt08h
+    int 21h
 
-	call PrintFrame
+    ; --- Save and install INT 09h (keyboard) ---
+    mov ax, 3509h
+    int 21h
+    mov word ptr cs:[old_int09_ptr],   bx
+    mov word ptr cs:[old_int09_ptr+2], es
 
-	add dh, 2
-	add dl, 2
+    push cs
+    pop ds
+    mov ax, 2509h
+    mov dx, offset NewInt09h
+    cli
+    int 21h
+    sti
+
+    ; --- Draw frame directly into draw_buf ---
+    ; drawCols=WIN_W and drawBase=offset draw_buf configure the procs to write
+    ; into the compact buffer (WIN_W*2 bytes/row, no stride gap).
+    ; DH=0, DL=0 places the frame at the buffer origin.
+    push cs
+    push cs
+    pop ds                          ; DS = CS (for drawCols/drawBase/frameChars)
+    pop es                          ; ES = CS (draw_buf lives here)
+
+    mov byte ptr [drawCols], WIN_W
+    mov word ptr [drawBase], offset draw_buf
+
+    mov dh, 0
+    mov dl, 0
+    mov bh, WIN_H
+    mov bl, WIN_W
+    call PrintFrame
+
+    mov dh, 1                       ; title at buffer row 1, col 2
+    mov dl, 2
     mov si, offset string
-
+    mov ah, FILL_ATTR
     call PrintString
 
-	exit0
+    tras0
 
-; =============================================================================
+; ============= NewInt08h ======================================================
+; Timer interrupt: if window is visible, compare video memory vs draw_buf and
+; refresh any cell that was overwritten by another program (save the foreign
+; value into save_buf so that hide restores the latest background).
+
+NewInt08h PROC
+    test byte ptr cs:[window_visible], 1
+    jz @@chain
+
+    push ax bx cx dx si di ds es
+    cld
+
+    push cs
+    pop ds                          ; DS = CS (our segment)
+
+    mov si, offset draw_buf         ; DS:SI → draw_buf  (sequential)
+    mov bx, offset save_buf         ; DS:BX → save_buf  (sequential, DS=CS)
+
+    mov ax, VideoMemorySeg
+    mov es, ax                      ; ES = B800h
+    mov di, WIN_VSTART              ; ES:DI → window top-left
+
+    mov dh, WIN_H                   ; outer loop: row counter
+@@rows:
+    push di                         ; save video row start
+    mov cx, WIN_W                   ; inner loop: column counter
+@@cols:
+    mov ax, es:[di]                 ; ax = current video cell
+    cmp ax, [si]                    ; == draw_buf reference?
+    je @@same
+    mov [bx], ax                    ; save_buf[i] ← video[i]  (foreign char)
+    mov ax, [si]                    ; ax = draw_buf[i]
+    mov es:[di], ax                 ; video[i] ← draw_buf[i]  (restore window)
+@@same:
+    add si, 2
+    add bx, 2
+    add di, 2
+    loop @@cols
+
+    pop di
+    add di, 160                     ; advance DI to next video row  (80*2)
+    dec dh
+    jnz @@rows
+
+    pop es ds di si dx cx bx ax
+
+@@chain:
+    jmp dword ptr cs:[old_int08_ptr]    ; tail-call: original does the IRET
+NewInt08h ENDP
+
+; ============= NewInt09h ======================================================
+; Keyboard interrupt: detect Ctrl + / to show/hide the window.
+;
+; Show (first press):
+;   1. Copy video window area → save_buf
+;   2. Copy draw_buf → video
+;
+; Hide (second press):
+;   1. Copy save_buf → video
+
+NewInt09h PROC
+    push ax bx cx dx si di bp ds es
+
+    in al, 60h                      ; read scancode before BIOS can ACK keyboard
+    mov cl, al                      ; CL = scancode for the rest of this handler
+
+    pushf
+    call dword ptr cs:[old_int09_ptr]   ; let BIOS update its key tables
+
+    ; --- Left Ctrl make / break ---
+    cmp cl, 1Dh                     ; Left Ctrl make
+    je @@ctrl_press
+    cmp cl, 1Dh or 80h              ; Left Ctrl break = 9Dh
+    je @@ctrl_release
+
+    ; --- / break: clear slash_down (checked before ctrl guard so it always fires) ---
+    cmp cl, 35h or 80h              ; / break = B5h
+    je @@slash_release
+
+    ; --- / press: only while Ctrl is held, no auto-repeat ---
+    test byte ptr cs:[ctrl_down], 1
+    jz @@done
+
+    cmp cl, 35h                     ; / make
+    jne @@done
+
+    test byte ptr cs:[slash_down], 1    ; already pressed? (auto-repeat guard)
+    jnz @@done
+
+    or byte ptr cs:[slash_down], 1      ; mark / as down
+
+    ; Toggle: show or hide
+    test byte ptr cs:[window_visible], 1
+    jnz @@hide
+
+    ; ==== Show window ====
+    ; 0. Snapshot register values into draw_buf before blitting.
+    ;
+    ; Stack layout after "push ax bx cx dx si di bp ds es" + HW INT frame
+    ; (9 regs × 2 = 18 bytes pushed by us, 3 words = 6 bytes pushed by CPU):
+    ;   BP+0 =ES  BP+2 =DS  BP+4 =BP  BP+6 =DI  BP+8 =SI
+    ;   BP+10=DX  BP+12=CX  BP+14=BX  BP+16=AX
+    ;   BP+18=IP  BP+20=CS  BP+22=FLAGS    SP_orig = BP+24
+    mov bp, sp
+    push cs
+    pop es                          ; ES = CS (draw_buf lives here)
+
+    mov ax, [bp+16]                 ; AX_orig
+    WriteRegHex 1
+    mov ax, [bp+14]                 ; BX_orig
+    WriteRegHex 2
+    mov ax, [bp+12]                 ; CX_orig
+    WriteRegHex 3
+    mov ax, [bp+10]                 ; DX_orig
+    WriteRegHex 4
+    mov ax, [bp+8]                  ; SI_orig
+    WriteRegHex 5
+    mov ax, [bp+6]                  ; DI_orig
+    WriteRegHex 6
+    mov ax, [bp+4]                  ; BP_orig
+    WriteRegHex 7
+    mov ax, bp
+    add ax, 24                      ; SP_orig = frame_ptr + 18 (my pushes) + 6 (HW INT)
+    WriteRegHex 8
+    mov ax, [bp+2]                  ; DS_orig
+    WriteRegHex 9
+    mov ax, [bp+0]                  ; ES_orig
+    WriteRegHex 10
+    mov ax, ss                      ; SS (not modified by handler)
+    WriteRegHex 11
+    mov ax, [bp+20]                 ; CS_orig
+    WriteRegHex 12
+    mov ax, [bp+18]                 ; IP_orig
+    WriteRegHex 13
+
+    ; 1. Copy video → save_buf (ES = CS already)
+    cld
+    mov di, offset save_buf         ; ES:DI → save_buf (sequential)
+    mov ax, VideoMemorySeg
+    mov ds, ax                      ; DS = B800h
+    mov si, WIN_VSTART              ; DS:SI → video window top-left
+    mov dh, WIN_H
+@@show_v2s:
+    mov cx, WIN_W
+    rep movsw                       ; DS:SI (video) → ES:DI (save_buf)
+    add si, WIN_STRIDE
+    dec dh
+    jnz @@show_v2s
+
+    ; 2. Copy draw_buf → video
+    push cs
+    pop ds                          ; DS = CS (draw_buf lives here)
+    mov si, offset draw_buf         ; DS:SI → draw_buf (sequential)
+    mov ax, VideoMemorySeg
+    mov es, ax                      ; ES = B800h
+    mov di, WIN_VSTART              ; ES:DI → video window top-left
+    mov dh, WIN_H
+@@show_d2v:
+    mov cx, WIN_W
+    rep movsw                       ; DS:SI (draw_buf) → ES:DI (video)
+    add di, WIN_STRIDE
+    dec dh
+    jnz @@show_d2v
+
+    mov byte ptr cs:[window_visible], 1
+    jmp @@done
+
+@@hide:
+    ; ==== Hide window: copy save_buf → video ====
+    cld
+    push cs
+    pop ds                          ; DS = CS (save_buf lives here)
+    mov si, offset save_buf         ; DS:SI → save_buf (sequential)
+    mov ax, VideoMemorySeg
+    mov es, ax                      ; ES = B800h
+    mov di, WIN_VSTART              ; ES:DI → video window top-left
+    mov dh, WIN_H
+@@hide_s2v:
+    mov cx, WIN_W
+    rep movsw                       ; DS:SI (save_buf) → ES:DI (video)
+    add di, WIN_STRIDE              ; skip per-row gap in video memory
+    dec dh
+    jnz @@hide_s2v
+
+    mov byte ptr cs:[window_visible], 0
+    jmp @@done
+
+@@ctrl_press:
+    or byte ptr cs:[ctrl_down], 1
+    jmp @@done
+
+@@ctrl_release:
+    and byte ptr cs:[ctrl_down], 0FEh
+    and byte ptr cs:[slash_down], 0FEh  ; combo broken — reset / state too
+    jmp @@done
+
+@@slash_release:
+    and byte ptr cs:[slash_down], 0FEh
+
+@@done:
+    pop es ds bp di si dx cx bx ax
+    iret
+NewInt09h ENDP
 
 INCLUDE frame.inc
 
+; ============= Resident data ==================================================
 
-; ============= DATA ===========================================================
-.data
-DATA
-
-; Border/fill character set — double-line box drawing style
-;   [0]='╔'  [1]='═'  [2]='╗'
-;   [3]='║'  [4]=' '  [5]='║'
-;   [6]='╚'  [7]='═'  [8]='╝'
+; Frame character and attribute tables — read by PrintFrame via DS
 frameChars  db  0C9h, 0CDh, 0BBh, 0BAh, 020h, 0BAh, 0C8h, 0CDh, 0BCh
+frameAttr   db  FRAME_ATTR
+fillAttr    db  FILL_ATTR
 
-frameAttr   db  04Eh    ; yellow (14) on red (4)    — border color
-fillAttr    db  03Eh    ; yellow (14) on black (0)  — interior fill color
+old_int08_ptr   dw 0, 0     ; offset, segment of original INT 08h
+old_int09_ptr   dw 0, 0     ; offset, segment of original INT 09h
+window_visible  db 0        ; 1 while window is on screen
+ctrl_down       db 0        ; 1 while Left Ctrl is physically held
+slash_down      db 0        ; 1 while / is physically held (auto-repeat guard)
 
-string      db "Some null terminated string", 0Ah, "with", 0Ah, "multiline", 0h;
+string          db "ax 0000", 0Ah, "bx 0000", 0Ah, "cx 0000", 0Ah, "dx 0000", 0Ah, \
+                   "si 0000", 0Ah, "di 0000", 0Ah, "bp 0000", 0Ah, "sp 0000", 0Ah, \
+                   "ds 0000", 0Ah, "es 0000", 0Ah, "ss 0000", 0Ah, "cs 0000", 0Ah, \
+                   "ip 0000", 0
+
+draw_buf        db WIN_BYTES dup(0)     ; reference copy of what we drew
+save_buf        db WIN_BYTES dup(0)     ; snapshot of screen under our window
 
 EOP:
 end Start

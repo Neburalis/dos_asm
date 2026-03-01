@@ -1,104 +1,97 @@
 ; ============= PrintFrame ====================================================
 ;
-; Draws a bordered rectangle directly into VGA text memory.
+; Draws a bordered rectangle into a target segment.
 ;
 ; IN:
-;	ES  = 0B800h    video segment  (caller sets once, not modified here)
-;	DH  = Y         top row        (0-24)
-;	DL  = X         left col       (0-79)
-;	BH  = height    total rows including borders  (>= 2)
-;	BL  = width     total cols including borders  (>= 2)
+;	ES  = target segment (0B800h for video; CS for a compact buffer)
+;	DH  = Y  top row   (0–24 for video; 0 for buffer origin)
+;	DL  = X  left col  (0–79 for video; 0 for buffer origin)
+;	BH  = height  total rows including borders (>= 2)
+;	BL  = width   total cols including borders (>= 2)
 ;
-; DATA (read from .data segment):
-;	frameChars[9] — border/fill characters:
-;		[0]=TL corner   [1]=top border  [2]=TR corner
-;		[3]=left border [4]=fill char   [5]=right border
-;		[6]=BL corner   [7]=bot border  [8]=BR corner
-;	frameAttr — color attribute byte for all border characters
-;	fillAttr  — color attribute byte for interior fill
+; GLOBAL VARS (read via DS):
+;	drawCols — columns per row in target   (80 for video, WIN_W for buffer)
+;	drawBase — byte offset added to DI     (0 for video, offset buf for buffer)
+;	frameChars[9], frameAttr, fillAttr
 ;
-; DESTR:
-;   AX, CX, SI, DI
-;   DirFlag
+; DESTR: AX, CX, SI, DI, DirFlag
 ;
 PrintFrame PROC
 	cld
 
-	; --- Compute DI = video memory offset of top-left corner ---
+	; --- DI = drawBase + (DH * drawCols + DL) * 2 ---
+	; mul ah is 8×8→16-bit: DX is untouched, keeping DL available afterward.
     push bx
-	video_mem_offset			; IN: DH=Y, DL=X  OUT: AX=(DH*80+DL)*2
+	mov al, dh
+	mov ah, [drawCols]
+	mul ah					; ax = DH * drawCols
+	mov bx, dx
+	xor bh, bh				; bx = DL
+	add ax, bx
+	shl ax, 1				; ax = (DH * drawCols + DL) * 2
+	add ax, [drawBase]
     pop bx
 	mov di, ax
 
 	mov ah, [frameAttr]
 
 	; --- Top row ---
-
-	mov al, [frameChars]		; [0] TL corner
-	stosw						; es:[di+=2] = ax
-
-	mov al, [frameChars+1]		; [1] top border
-	xor ch, ch
-	mov cl, bl
-	sub cx, 2					; cx = width - 2
-	rep stosw					; write top border chars
-
-	mov al, [frameChars+2]		; [2] TR corner
+	mov al, [frameChars]		; TL corner
 	stosw
-	; DI now sits width*2 bytes past the top-left corner
-
-	; Precompute row advance: 160 - width*2
-	; After writing a full row of width chars the cursor is width*2 bytes past
-	; the row's left col; adding (160 - width*2) steps it to the same col on
-	; the next row (160 = 80 cols * 2 bytes/cell).
+	mov al, [frameChars+1]		; top border
 	xor ch, ch
 	mov cl, bl
-	shl cx, 1					; cx = width * 2
-	mov si, 160
-	sub si, cx					; si = 160 - width*2
+	sub cx, 2
+	rep stosw
+	mov al, [frameChars+2]		; TR corner
+	stosw
+
+	; Row advance = (drawCols - width) * 2
+	; (0 for a compact buffer where drawCols == width; 160-w*2 for video)
+	xor ah, ah
+	mov al, [drawCols]
+	sub al, bl
+	shl ax, 1
+	mov si, ax
 
 	; --- Middle rows: height-2 iterations ---
 	mov cl, bh
 	xor ch, ch
-	sub cx, 2					; cx = height - 2
+	sub cx, 2
 
 @@mid_loop:
-	add di, si					; advance DI to left border of next row
+	add di, si
 
-	mov al, [frameChars+3]		; [3] left border
+	mov al, [frameChars+3]		; left border
 	mov ah, [frameAttr]
 	stosw
 
-	mov al, [frameChars+4]		; [4] fill char
+	mov al, [frameChars+4]		; fill char
 	mov ah, [fillAttr]
-	push cx						; save row loop counter
+	push cx
 	xor ch, ch
 	mov cl, bl
-	sub cx, 2					; cx = width - 2
-	rep stosw					; fill interior
-	pop cx						; restore row loop counter
+	sub cx, 2
+	rep stosw
+	pop cx
 
-	mov al, [frameChars+5]		; [5] right border
+	mov al, [frameChars+5]		; right border
 	mov ah, [frameAttr]
 	stosw
 
 	loop @@mid_loop
 
 	; --- Bottom row ---
-	add di, si					; same advance (si = 160 - width*2, still valid)
-
+	add di, si
 	mov ah, [frameAttr]
-
-	mov al, [frameChars+6]		; [6] BL corner
+	mov al, [frameChars+6]		; BL corner
 	stosw
-
-	mov al, [frameChars+7]		; [7] bottom border
+	mov al, [frameChars+7]		; bottom border
 	xor ch, ch
 	mov cl, bl
-	sub cx, 2					; cx = width - 2
+	sub cx, 2
 	rep stosw
-
-	mov al, [frameChars+8]		; [8] BR corner
+	mov al, [frameChars+8]		; BR corner
 	stosw
 
 	ret
@@ -109,46 +102,53 @@ PrintFrame ENDP
 ; Fill a rectangular region with a character, preserving existing attributes.
 ;
 ; IN:
-;	ES  = 0B800h    video segment  (caller sets once, not modified here)
-;	DH  = Y         top row        (0-24)
-;	DL  = X         left col       (0-79)
-;	BH  = height    number of rows (>= 1)
-;	BL  = width     number of cols (>= 1)
+;	ES  = target segment
+;	DH  = Y, DL = X, BH = height, BL = width
 ;	AL  = fill char
 ;
+; GLOBAL VARS (read via DS): drawCols, drawBase
+;
 ; OUT:  -
-; DESTR: AX, CX, SI, DI
-;        DirFlag
+; DESTR: AX, CX, SI, DI, DirFlag
 ;
 FillFrame PROC
 	cld
 
-	; --- Compute DI = video memory offset of top-left corner ---
-	push bx
-	video_mem_offset			; IN: DH=Y, DL=X  OUT: AX=(DH*80+DL)*2  DESTR: BX
-	pop bx
+	; --- DI = drawBase + (DH * drawCols + DL) * 2 ---
+	; Save AL (fill char) and BX (height:width) across the offset computation.
+	push ax bx
+	mov al, dh
+	mov ah, [drawCols]
+	mul ah
+	mov bx, dx
+	xor bh, bh
+	add ax, bx
+	shl ax, 1
+	add ax, [drawBase]
 	mov di, ax
+	pop bx					; restore BH=height, BL=width
+	pop ax					; restore AL=fill char
 
-	; Precompute row advance: 160 - width*2
+	; Row advance = (drawCols - width) * 2  (use CX as scratch, reset after)
 	xor ch, ch
-	mov cl, bl
-	shl cx, 1					; cx = width*2
-	mov si, 160
-	sub si, cx					; si = 160 - width*2
+	mov cl, [drawCols]
+	sub cl, bl
+	shl cx, 1
+	mov si, cx
 
 	mov cl, bh
-	xor ch, ch					; cx = height (outer loop)
+	xor ch, ch				; cx = height (outer loop)
 
 @@row_loop:
-	push cx						; save row counter
+	push cx
 	xor ch, ch
-	mov cl, bl					; cx = width (inner loop)
+	mov cl, bl				; cx = width (inner loop)
 @@col_loop:
-	mov ah, es:[di+1]			; read existing attribute byte
-	stosw						; write AL (char) + AH (preserved attr), DI += 2
+	mov ah, es:[di+1]		; preserve existing attribute byte
+	stosw
 	loop @@col_loop
-	add di, si					; advance DI to same column on next row
-	pop cx						; restore row counter
+	add di, si
+	pop cx
 	loop @@row_loop
 
 	ret
@@ -158,45 +158,70 @@ FillFrame ENDP
 ; ============= PrintString ===================================================
 ;
 ; Print a null-terminated string at screen coordinates DX.
-; Treats \n (5Ch) as a line break: advances DH by one row,
-; resets DL to the original starting column, and continues printing.
+; Treats 0Ah as a line break: advances DH, resets DL to original column.
 ;
 ; IN:
-;	ES    = 0B800h    video segment  (caller sets once, not modified here)
-;	DH    = Y         start row      (0-24)
-;	DL    = X         start col      (0-79)  — restored on each '\' line break
-;	DS:SI = pointer to null-terminated string
+;	ES    = target segment
+;	DH    = Y, DL = X  (DL restored on each line break)
+;	DS:SI = null-terminated string
 ;	AH    = color attribute
 ;
+; GLOBAL VARS (read via DS): drawCols, drawBase
+;
 ; OUT:  -
-; DESTR: AX, BX, DI, SI, DH
-;        DirFlag
+; DESTR: AX, BX, DI, SI, DH, DirFlag
 ;
 PrintString PROC
-	push ax						; save AH (color attr) across video_mem_offset
-	video_mem_offset			; IN: DH=Y, DL=X  OUT: AX=(DH*80+DL)*2  DESTR: BX
+	push ax					; save AH across offset computation
+	mov al, dh
+	mov ah, [drawCols]
+	mul ah
+	mov bx, dx
+	xor bh, bh
+	add ax, bx
+	shl ax, 1
+	add ax, [drawBase]
 	mov di, ax
-	pop ax						; restore AH; AL will be overwritten by lodsb
+	pop ax
 
 	cld
 
 @@loop:
-	lodsb						; al = ds:[si++]
+	lodsb
 	test al, al
 	jz @@done
-	cmp al, 0Ah				; line break?
+	cmp al, 0Ah
 	je @@newline
-	stosw						; es:[di+=2] = ax  (char + attr)
+	stosw
 	jmp @@loop
 
 @@newline:
-	inc dh						; next row; DL = original X (never modified)
-	push ax						; save AH
-	video_mem_offset			; recompute DI for new row, same column
+	inc dh					; next row; DL unchanged = same starting column
+	push ax
+	mov al, dh
+	mov ah, [drawCols]
+	mul ah
+	mov bx, dx
+	xor bh, bh
+	add ax, bx
+	shl ax, 1
+	add ax, [drawBase]
 	mov di, ax
-	pop ax						; restore AH
+	pop ax
 	jmp @@loop
 
 @@done:
 	ret
 PrintString ENDP
+
+; ============= Draw surface parameters =======================================
+;
+; For VGA text video memory (ES = 0B800h):
+;   drawCols = 80,  drawBase = 0             (default — video mode)
+;
+; For a compact window buffer (ES = CS):
+;   drawCols = WIN_W,  drawBase = offset draw_buf
+;   Pass DH=0, DL=0 so the frame fills the buffer from its very first cell.
+
+drawCols    db  80      ; columns per row in target surface
+drawBase    dw  0       ; byte offset added to the computed DI
