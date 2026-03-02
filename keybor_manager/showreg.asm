@@ -27,8 +27,8 @@ FILL_ATTR   equ 0Fh         ; bright white on black — interior
 ToHexDigit MACRO
     add bl, '0'
     cmp bl, '9'+1
-    jl  $+5             ; 7C 03      — skip add bl,7 when already a digit
-    add bl, 7           ;  80 C3 07  — bridge '9' → 'A' for values 10–15
+    jl  $+5             ;  7C 03     — skip add bl,7 when already a digit
+    add bl, 7           ;  80 C3 07  — bridge '9' -> 'A' for values 10–15
 ENDM
 
 ; WriteRegHex: write AX as 4 hex chars into buf in memory.
@@ -37,7 +37,7 @@ ENDM
 ; EXP:
 ;   ES:DI - pointer where need to draw
 ; DESTR:
-;   BL
+;   BL, DI
 ;
 WriteRegHex MACRO reg_row
     mov di, offset draw_buf + ((reg_row) * WIN_W + 5) * 2
@@ -129,18 +129,19 @@ NewInt08h PROC
     test byte ptr cs:[window_visible], 1
     jz @@chain
 
-    push ax bx cx dx si di ds es
-    cld
+    push ax bx cx dx si di bp ds es
+
+	cld
 
     push cs
     pop ds                          ; DS = CS (our segment)
 
-    mov si, offset draw_buf         ; DS:SI → draw_buf  (sequential)
-    mov bx, offset save_buf         ; DS:BX → save_buf  (sequential, DS=CS)
+    mov si, offset draw_buf         ; DS:SI -> draw_buf  (sequential)
+    mov bx, offset save_buf         ; DS:BX -> save_buf  (sequential, DS=CS)
 
     mov ax, VideoMemorySeg
     mov es, ax                      ; ES = B800h
-    mov di, WIN_VSTART              ; ES:DI → window top-left
+    mov di, WIN_VSTART              ; ES:DI -> window top-left
 
     mov dh, WIN_H                   ; outer loop: row counter
 @@rows:
@@ -150,9 +151,9 @@ NewInt08h PROC
     mov ax, es:[di]                 ; ax = current video cell
     cmp ax, [si]                    ; == draw_buf reference?
     je @@same
-    mov [bx], ax                    ; save_buf[i] ← video[i]  (foreign char)
+    mov [bx], ax                    ; save_buf[i] <- video[i]  (foreign char)
     mov ax, [si]                    ; ax = draw_buf[i]
-    mov es:[di], ax                 ; video[i] ← draw_buf[i]  (restore window)
+    mov es:[di], ax                 ; video[i] <- draw_buf[i]  (restore window)
 @@same:
     add si, 2
     add bx, 2
@@ -164,7 +165,57 @@ NewInt08h PROC
     dec dh
     jnz @@rows
 
-    pop es ds di si dx cx bx ax
+	mov bp, sp
+    push cs
+    pop es                          ; ES = CS (draw_buf lives here)
+
+    mov ax, [bp+16]                 ; AX_orig
+    WriteRegHex 1
+    mov ax, [bp+14]                 ; BX_orig
+    WriteRegHex 2
+    mov ax, [bp+12]                 ; CX_orig
+    WriteRegHex 3
+    mov ax, [bp+10]                 ; DX_orig
+    WriteRegHex 4
+    mov ax, [bp+8]                  ; SI_orig
+    WriteRegHex 5
+    mov ax, [bp+6]                  ; DI_orig
+    WriteRegHex 6
+    mov ax, [bp+4]                  ; BP_orig
+    WriteRegHex 7
+    mov ax, bp
+    add ax, 24                      ; SP_orig = frame_ptr + 18 (my pushes) + 6 (HW INT)
+    WriteRegHex 8
+    mov ax, [bp+2]                  ; DS_orig
+    WriteRegHex 9
+    mov ax, [bp+0]                  ; ES_orig
+    WriteRegHex 10
+    mov ax, ss                      ; SS (not modified by handler)
+    WriteRegHex 11
+    mov ax, [bp+20]                 ; CS_orig
+    WriteRegHex 12
+    mov ax, [bp+18]                 ; IP_orig
+    WriteRegHex 13
+
+	push cs
+    pop ds                          ; DS = CS (our segment)
+
+    mov si, offset draw_buf         ; DS:SI -> draw_buf  (sequential)
+    mov bx, offset save_buf         ; DS:BX -> save_buf  (sequential, DS=CS)
+
+    mov ax, VideoMemorySeg
+    mov es, ax                      ; ES = B800h
+    mov di, WIN_VSTART              ; ES:DI -> window top-left
+
+    mov dh, WIN_H                   ; outer loop: row counter
+@@blit:
+    mov cx, WIN_W
+    rep movsw
+    add di, WIN_STRIDE
+    dec dh
+    jnz @@blit
+
+    pop es ds bp di si dx cx bx ax
 
 @@chain:
     jmp dword ptr cs:[old_int08_ptr]    ; tail-call: original does the IRET
@@ -174,20 +225,17 @@ NewInt08h ENDP
 ; Keyboard interrupt: detect Ctrl + / to show/hide the window.
 ;
 ; Show (first press):
-;   1. Copy video window area → save_buf
-;   2. Copy draw_buf → video
+;   1. Copy video window area -> save_buf
+;   2. Copy draw_buf -> video
 ;
 ; Hide (second press):
-;   1. Copy save_buf → video
+;   1. Copy save_buf -> video
 
 NewInt09h PROC
     push ax bx cx dx si di bp ds es
 
     in al, 60h                      ; read scancode before BIOS can ACK keyboard
     mov cl, al                      ; CL = scancode for the rest of this handler
-
-    pushf
-    call dword ptr cs:[old_int09_ptr]   ; let BIOS update its key tables
 
     ; --- Left Ctrl make / break ---
     cmp cl, 1Dh                     ; Left Ctrl make
@@ -255,31 +303,31 @@ NewInt09h PROC
     mov ax, [bp+18]                 ; IP_orig
     WriteRegHex 13
 
-    ; 1. Copy video → save_buf (ES = CS already)
+    ; 1. Copy video -> save_buf (ES = CS already)
     cld
-    mov di, offset save_buf         ; ES:DI → save_buf (sequential)
+    mov di, offset save_buf         ; ES:DI -> save_buf (sequential)
     mov ax, VideoMemorySeg
     mov ds, ax                      ; DS = B800h
-    mov si, WIN_VSTART              ; DS:SI → video window top-left
+    mov si, WIN_VSTART              ; DS:SI -> video window top-left
     mov dh, WIN_H
 @@show_v2s:
     mov cx, WIN_W
-    rep movsw                       ; DS:SI (video) → ES:DI (save_buf)
+    rep movsw                       ; DS:SI (video) -> ES:DI (save_buf)
     add si, WIN_STRIDE
     dec dh
     jnz @@show_v2s
 
-    ; 2. Copy draw_buf → video
+    ; 2. Copy draw_buf -> video
     push cs
     pop ds                          ; DS = CS (draw_buf lives here)
-    mov si, offset draw_buf         ; DS:SI → draw_buf (sequential)
+    mov si, offset draw_buf         ; DS:SI -> draw_buf (sequential)
     mov ax, VideoMemorySeg
     mov es, ax                      ; ES = B800h
-    mov di, WIN_VSTART              ; ES:DI → video window top-left
+    mov di, WIN_VSTART              ; ES:DI -> video window top-left
     mov dh, WIN_H
 @@show_d2v:
     mov cx, WIN_W
-    rep movsw                       ; DS:SI (draw_buf) → ES:DI (video)
+    rep movsw                       ; DS:SI (draw_buf) -> ES:DI (video)
     add di, WIN_STRIDE
     dec dh
     jnz @@show_d2v
@@ -288,19 +336,19 @@ NewInt09h PROC
     jmp @@done
 
 @@hide:
-    ; ==== Hide window: copy save_buf → video ====
+    ; ==== Hide window: copy save_buf -> video ====
     cld
     push cs
     pop ds                          ; DS = CS (save_buf lives here)
-    mov si, offset save_buf         ; DS:SI → save_buf (sequential)
+    mov si, offset save_buf         ; DS:SI -> save_buf (sequential)
     mov ax, VideoMemorySeg
     mov es, ax                      ; ES = B800h
-    mov di, WIN_VSTART              ; ES:DI → video window top-left
+    mov di, WIN_VSTART              ; ES:DI -> video window top-left
     mov dh, WIN_H
 @@hide_s2v:
     mov cx, WIN_W
-    rep movsw                       ; DS:SI (save_buf) → ES:DI (video)
-    add di, WIN_STRIDE              ; skip per-row gap in video memory
+    rep movsw                       ; DS:SI (save_buf) -> ES:DI (video)
+    add di, WIN_STRIDE
     dec dh
     jnz @@hide_s2v
 
@@ -313,7 +361,7 @@ NewInt09h PROC
 
 @@ctrl_release:
     and byte ptr cs:[ctrl_down], 0FEh
-    and byte ptr cs:[slash_down], 0FEh  ; combo broken — reset / state too
+    and byte ptr cs:[slash_down], 0FEh
     jmp @@done
 
 @@slash_release:
@@ -321,7 +369,7 @@ NewInt09h PROC
 
 @@done:
     pop es ds bp di si dx cx bx ax
-    iret
+	jmp dword ptr cs:[old_int09_ptr]
 NewInt09h ENDP
 
 INCLUDE frame.inc
@@ -344,8 +392,8 @@ string          db "ax 0000", 0Ah, "bx 0000", 0Ah, "cx 0000", 0Ah, "dx 0000", 0A
                    "ds 0000", 0Ah, "es 0000", 0Ah, "ss 0000", 0Ah, "cs 0000", 0Ah, \
                    "ip 0000", 0
 
-draw_buf        db WIN_BYTES dup(0)     ; reference copy of what we drew
 save_buf        db WIN_BYTES dup(0)     ; snapshot of screen under our window
+draw_buf        db WIN_BYTES dup(0)     ; reference copy of what we drew
 
 EOP:
 end Start
