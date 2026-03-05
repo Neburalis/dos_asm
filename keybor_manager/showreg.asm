@@ -66,46 +66,54 @@ WriteRegHex MACRO reg_row
     mov byte ptr es:[di], bl
 ENDM
 
-; WriteAllRegs: snapshot all saved regs from interrupt stack frame into draw_buf.
+; WriteAllRegs: snapshot all saved regs from INT stack frame into draw_buf.
 ; IN:
-;   BP    - stack frame pointer (set via "mov bp, sp" after push ax bx cx dx si di bp ds es)
-;   ES    - segment of draw_buf
-; DESTR:
-;   AX, BL, DI
+;   BP  - frame pointer
+;   ES  - segment of draw_buf
+; DESTR: AX, BX, CX, DI, SI
 ;
 ; Stack layout (9 regs × 2 = 18 bytes + HW INT frame 6 bytes = 24 total):
 ;   BP+0=ES  BP+2=DS  BP+4=BP  BP+6=DI  BP+8=SI
 ;   BP+10=DX BP+12=CX BP+14=BX BP+16=AX
 ;   BP+18=IP BP+20=CS BP+22=FLAGS   SP_orig=BP+24
 ;
+; Inline table of BP offsets per display row (jumped over at runtime).
+; Sentinels: 0FFFFh = SP (BP+24), 0FFFEh = SS (read directly).
+;
 WriteAllRegs MACRO
-    mov ax, [bp+16]                 ; AX_orig
-    WriteRegHex 1
-    mov ax, [bp+14]                 ; BX_orig
-    WriteRegHex 2
-    mov ax, [bp+12]                 ; CX_orig
-    WriteRegHex 3
-    mov ax, [bp+10]                 ; DX_orig
-    WriteRegHex 4
-    mov ax, [bp+8]                  ; SI_orig
-    WriteRegHex 5
-    mov ax, [bp+6]                  ; DI_orig
-    WriteRegHex 6
-    mov ax, [bp+4]                  ; BP_orig
-    WriteRegHex 7
+    jmp @@wr_code
+@@wr_table:
+    dw 16, 14, 12, 10, 8, 6, 4, 24, 2, 0, 0FFFEh, 20, 18
+@@wr_code:
+    mov bx, offset @@wr_table
+    mov di, offset draw_buf + (1 * WIN_W + 5) * 2  ; row 1, col 5
+    mov cx, 13
+@@wr_loop:
+    mov si, [bx]                    ; SI = frame offset (or sentinel)
+    add bx, 2
+    mov ax, [bp+si]                 ; load reg value; junk for sentinels, overwritten below
+    cmp si, 0FFFFh                  ; SP: overwrite with BP+24
+    jne @@wr_not_sp
     mov ax, bp
-    add ax, 24                      ; SP_orig = frame_ptr + 18 (pushes) + 6 (HW INT)
-    WriteRegHex 8
-    mov ax, [bp+2]                  ; DS_orig
-    WriteRegHex 9
-    mov ax, [bp+0]                  ; ES_orig
-    WriteRegHex 10
-    mov ax, ss                      ; SS (not modified by handler)
-    WriteRegHex 11
-    mov ax, [bp+20]                 ; CS_orig
-    WriteRegHex 12
-    mov ax, [bp+18]                 ; IP_orig
-    WriteRegHex 13
+    add ax, 24
+@@wr_not_sp:
+    cmp si, 0FFFEh                  ; SS: overwrite with SS
+    jne @@wr_write
+    mov ax, ss
+@@wr_write:
+    push cx                         ; save outer counter
+    mov cx, 4                       ; 4 hex nibbles per register
+@@wr_nibble:
+    rol ax, 4
+    mov bl, al
+    and bl, 0Fh
+    ToHexDigit
+    mov byte ptr es:[di], bl
+    add di, 2
+    loop @@wr_nibble
+    pop cx
+    add di, WIN_W * 2 - 8           ; advance DI to next row (22 - 4*2 = 14)
+    loop @@wr_loop
 ENDM
 
 ; ============= Start ==========================================================
