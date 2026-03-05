@@ -66,6 +66,48 @@ WriteRegHex MACRO reg_row
     mov byte ptr es:[di], bl
 ENDM
 
+; WriteAllRegs: snapshot all saved regs from interrupt stack frame into draw_buf.
+; IN:
+;   BP    - stack frame pointer (set via "mov bp, sp" after push ax bx cx dx si di bp ds es)
+;   ES    - segment of draw_buf
+; DESTR:
+;   AX, BL, DI
+;
+; Stack layout (9 regs × 2 = 18 bytes + HW INT frame 6 bytes = 24 total):
+;   BP+0=ES  BP+2=DS  BP+4=BP  BP+6=DI  BP+8=SI
+;   BP+10=DX BP+12=CX BP+14=BX BP+16=AX
+;   BP+18=IP BP+20=CS BP+22=FLAGS   SP_orig=BP+24
+;
+WriteAllRegs MACRO
+    mov ax, [bp+16]                 ; AX_orig
+    WriteRegHex 1
+    mov ax, [bp+14]                 ; BX_orig
+    WriteRegHex 2
+    mov ax, [bp+12]                 ; CX_orig
+    WriteRegHex 3
+    mov ax, [bp+10]                 ; DX_orig
+    WriteRegHex 4
+    mov ax, [bp+8]                  ; SI_orig
+    WriteRegHex 5
+    mov ax, [bp+6]                  ; DI_orig
+    WriteRegHex 6
+    mov ax, [bp+4]                  ; BP_orig
+    WriteRegHex 7
+    mov ax, bp
+    add ax, 24                      ; SP_orig = frame_ptr + 18 (pushes) + 6 (HW INT)
+    WriteRegHex 8
+    mov ax, [bp+2]                  ; DS_orig
+    WriteRegHex 9
+    mov ax, [bp+0]                  ; ES_orig
+    WriteRegHex 10
+    mov ax, ss                      ; SS (not modified by handler)
+    WriteRegHex 11
+    mov ax, [bp+20]                 ; CS_orig
+    WriteRegHex 12
+    mov ax, [bp+18]                 ; IP_orig
+    WriteRegHex 13
+ENDM
+
 ; ============= Start ==========================================================
 Start:
     ; --- Save and install INT 08h (timer) ---
@@ -169,33 +211,7 @@ NewInt08h PROC
     push cs
     pop es                          ; ES = CS (draw_buf lives here)
 
-    mov ax, [bp+16]                 ; AX_orig
-    WriteRegHex 1
-    mov ax, [bp+14]                 ; BX_orig
-    WriteRegHex 2
-    mov ax, [bp+12]                 ; CX_orig
-    WriteRegHex 3
-    mov ax, [bp+10]                 ; DX_orig
-    WriteRegHex 4
-    mov ax, [bp+8]                  ; SI_orig
-    WriteRegHex 5
-    mov ax, [bp+6]                  ; DI_orig
-    WriteRegHex 6
-    mov ax, [bp+4]                  ; BP_orig
-    WriteRegHex 7
-    mov ax, bp
-    add ax, 24                      ; SP_orig = frame_ptr + 18 (my pushes) + 6 (HW INT)
-    WriteRegHex 8
-    mov ax, [bp+2]                  ; DS_orig
-    WriteRegHex 9
-    mov ax, [bp+0]                  ; ES_orig
-    WriteRegHex 10
-    mov ax, ss                      ; SS (not modified by handler)
-    WriteRegHex 11
-    mov ax, [bp+20]                 ; CS_orig
-    WriteRegHex 12
-    mov ax, [bp+18]                 ; IP_orig
-    WriteRegHex 13
+    WriteAllRegs
 
 	push cs
     pop ds                          ; DS = CS (our segment)
@@ -265,43 +281,11 @@ NewInt09h PROC
 
     ; ==== Show window ====
     ; 0. Snapshot register values into draw_buf before blitting.
-    ;
-    ; Stack layout after "push ax bx cx dx si di bp ds es" + HW INT frame
-    ; (9 regs × 2 = 18 bytes pushed by us, 3 words = 6 bytes pushed by CPU):
-    ;   BP+0 =ES  BP+2 =DS  BP+4 =BP  BP+6 =DI  BP+8 =SI
-    ;   BP+10=DX  BP+12=CX  BP+14=BX  BP+16=AX
-    ;   BP+18=IP  BP+20=CS  BP+22=FLAGS    SP_orig = BP+24
     mov bp, sp
     push cs
     pop es                          ; ES = CS (draw_buf lives here)
 
-    mov ax, [bp+16]                 ; AX_orig
-    WriteRegHex 1
-    mov ax, [bp+14]                 ; BX_orig
-    WriteRegHex 2
-    mov ax, [bp+12]                 ; CX_orig
-    WriteRegHex 3
-    mov ax, [bp+10]                 ; DX_orig
-    WriteRegHex 4
-    mov ax, [bp+8]                  ; SI_orig
-    WriteRegHex 5
-    mov ax, [bp+6]                  ; DI_orig
-    WriteRegHex 6
-    mov ax, [bp+4]                  ; BP_orig
-    WriteRegHex 7
-    mov ax, bp
-    add ax, 24                      ; SP_orig = frame_ptr + 18 (my pushes) + 6 (HW INT)
-    WriteRegHex 8
-    mov ax, [bp+2]                  ; DS_orig
-    WriteRegHex 9
-    mov ax, [bp+0]                  ; ES_orig
-    WriteRegHex 10
-    mov ax, ss                      ; SS (not modified by handler)
-    WriteRegHex 11
-    mov ax, [bp+20]                 ; CS_orig
-    WriteRegHex 12
-    mov ax, [bp+18]                 ; IP_orig
-    WriteRegHex 13
+    WriteAllRegs
 
     ; 1. Copy video -> save_buf (ES = CS already)
     cld
