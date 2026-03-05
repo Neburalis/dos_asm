@@ -1,44 +1,79 @@
-# keybor_manager
+# showreg
 
-An educational project exploring interrupt-driven keyboard handling in DOS. Installs a custom INT 09h handler as a TSR, reads PS/2 scancodes from port `60h`, displays them at a fixed position in video memory, and stays resident.
+An educational project that installs a floating register-display overlay as a DOS TSR. Press **Ctrl+/** to toggle the window on and off; it continuously shows the CPU register snapshot captured at interrupt time.
 
-## What It Does
+## INT 08h Handler — Timer
 
-- Sets `ES = 0` to access the **Interrupt Vector Table**
-- Patches IVT entry `4 * 09h` to point to `NewInt09h` (within the current CS)
-- Calls `INT 21h / AX=3100h` (**TSR**) to stay resident; size is computed from `offset EOP` rounded up to paragraphs
-- On every keypress, `NewInt09h` fires:
-  - Reads the scancode from port `60h` into `AL`
-  - Writes `AX` (scancode + attribute `4Eh`) to a **fixed cell**: row 3, column 40 (`BX = (80×3 + 40)×2 = 560`)
-  - Acknowledges the keyboard by toggling bit 7 of PPI port `61h`
-  - Sends **EOI** (`20h -> port 20h`) to the master PIC
-  - Returns with `IRET`
+Fires every ~18.2 ms. When the window is visible:
 
-## Internal Routines
+1. **Integrity check**: walks each cell of the window in video memory; if a cell differs from `draw_buf`, saves the foreign value to `save_buf` and restores `draw_buf` over it. Keeps the window on top even when other programs write to the screen.
+2. **Register snapshot**: reads saved register values off the interrupt stack frame and updates the hex digits in `draw_buf` in place.
+3. **Blit**: copies `draw_buf` → video memory.
 
-| Routine / Macro | Description |
-|-----------------|-------------|
-| `exit0` (macro) | Calls `INT 21h / AX=4C00h` to exit to DOS (defined but unused) |
-| `tasr0` (macro) | Terminates and stays resident via `INT 21h / AX=3100h`; calculates resident size in paragraphs using `offset EOP` |
-| `BkPt` (macro)  | Inserts `INT 3h` breakpoint if `Debug == 1` |
-| `vskip` (macro) | Inserts four `NOP` bytes (`90909090h`) if `Debug == 1` |
-| `NewInt09h`     | ISR for INT 09h — reads scancode, updates video memory, resets keyboard, sends EOI |
-| `EOP` (label)   | Marks end of resident code for size calculation in `tasr0` |
+## INT 09h Handler — Keyboard
+
+Reads scancode from port `60h` before BIOS can acknowledge it, then chains to the original handler.
+
+- Tracks **Left Ctrl** (`1Dh` make / `9Dh` break) in `ctrl_down`
+- Tracks **/** (`35h` make / `B5h` break) in `slash_down` (auto-repeat guard)
+- On **Ctrl+/ press**:
+  - **Show**: snapshot current video window area → `save_buf`; write register values into `draw_buf`; blit `draw_buf` → video; set `window_visible = 1`
+  - **Hide**: copy `save_buf` → video; set `window_visible = 0`
+
+## Stack Frame Layout (both handlers)
+
+After `push ax bx cx dx si di bp ds es` (18 bytes) + CPU hardware frame (IP, CS, FLAGS = 6 bytes):
+
+| `[BP+N]` | Register |
+|----------|----------|
+| `[BP+0]` | ES |
+| `[BP+2]` | DS |
+| `[BP+4]` | BP |
+| `[BP+6]` | DI |
+| `[BP+8]` | SI |
+| `[BP+10]` | DX |
+| `[BP+12]` | CX |
+| `[BP+14]` | BX |
+| `[BP+16]` | AX |
+| `[BP+18]` | IP |
+| `[BP+20]` | CS |
+| `[BP+22]` | FLAGS |
+| `BP + 24` | SP (original) |
+
+## Macros
+
+| Macro | Description |
+|-------|-------------|
+| `ToHexDigit` | Converts nibble in `BL` (0–15) to ASCII hex char in-place; no labels, safe for multiple expansions in the same PROC |
+| `WriteRegHex row` | Writes `AX` as 4 hex characters into `draw_buf` at interior column 4 of the given row (0-based within buffer) |
+
+## Routines (from `frame.inc`)
+
+| Routine | Description |
+|---------|-------------|
+| `PrintFrame` | Draws double-line border into `draw_buf`; configured by `drawCols`/`drawBase` globals |
+| `PrintString` | Prints null-terminated string supporting `0Ah` newlines; configured by `drawCols`/`drawBase` |
+
+## Resident Data
+
+| Symbol | Purpose |
+|--------|---------|
+| `old_int08_ptr` | Saved INT 08h vector (offset + segment) |
+| `old_int09_ptr` | Saved INT 09h vector (offset + segment) |
+| `window_visible` | `1` while window is displayed, `0` while window is hidden |
+| `ctrl_down` | `1` while Left Ctrl is physically held |
+| `slash_down` | `1` while `/` is held (prevents auto-repeat toggling) |
+| `frameChars` | 9-byte double-line corner/edge character table |
+| `string` | Multiline label text printed into the frame at init |
+| `save_buf` | Screen snapshot beneath the window (`WIN_W × WIN_H × 2` bytes) |
+| `draw_buf` | Authoritative window contents — source of truth for integrity checks and blits |
 
 ## Build
 
 ```
-tasm /la test.asm
-tlink /t test.obj
-test.com
+tasm /la /Ipath/to/folder/libs/ showreg.asm
+tlink /t showreg.obj
+showreg.com
 ```
 
-## Data
-
-```asm
-VideoMemorySeg  equ 0B800h   ; CGA/VGA color text-mode segment
-                              ; AH = 4Eh  -> yellow on red attribute
-                              ; Fixed cell: row 3, col 40 -> offset 560 (BX = (80*3+40)*2)
-```
-
-> `debug.inc` must be present in the same directory. Set `Debug equ 0` to strip breakpoints from the build.
+> you should replace path/to/folder/ with the correct path to the repository (In my case: `/IS:\DOC\DOS_ASM\LIBS\`).
