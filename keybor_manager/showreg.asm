@@ -23,7 +23,10 @@ FILL_ATTR   equ 0Fh         ; bright white on black — interior
 ; ============= Hex display macros ============================================
 ;
 ; ToHexDigit: convert nibble in BL (0–15) to ASCII hex char in BL.
-; No labels — safe for multiple expansions inside the same PROC.
+; IN:
+;   BL - reg to show
+; DESTR:
+;   BL
 ToHexDigit MACRO
     add bl, '0'
     cmp bl, '9'+1
@@ -67,7 +70,7 @@ WriteRegHex MACRO reg_row
 ENDM
 
 ; WriteAllRegs: snapshot all saved regs from INT stack frame into draw_buf.
-; IN:
+; EXP:
 ;   BP  - frame pointer
 ;   ES  - segment of draw_buf
 ; DESTR: AX, BX, CX, DI, SI
@@ -76,9 +79,6 @@ ENDM
 ;   BP+0=ES  BP+2=DS  BP+4=BP  BP+6=DI  BP+8=SI
 ;   BP+10=DX BP+12=CX BP+14=BX BP+16=AX
 ;   BP+18=IP BP+20=CS BP+22=FLAGS   SP_orig=BP+24
-;
-; Inline table of BP offsets per display row (jumped over at runtime).
-; Sentinels: 0FFFFh = SP (BP+24), 0FFFEh = SS (read directly).
 ;
 WriteAllRegs MACRO
     jmp @@wr_code
@@ -144,10 +144,7 @@ Start:
     int 21h
     sti
 
-    ; --- Draw frame directly into draw_buf ---
-    ; drawCols=WIN_W and drawBase=offset draw_buf configure the procs to write
-    ; into the compact buffer (WIN_W*2 bytes/row, no stride gap).
-    ; DH=0, DL=0 places the frame at the buffer origin.
+    ; --- Draw frame into draw_buf ---
     push cs
     push cs
     pop ds                          ; DS = CS (for drawCols/drawBase/frameChars)
