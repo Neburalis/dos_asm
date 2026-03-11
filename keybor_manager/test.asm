@@ -24,9 +24,9 @@ start:
     ; jmp setup
 after_setup:
 
-    mov  ax, 7777h
+    mov  ax, 5555h
     mov  es, ax
-    mov  di, 8888h                ; ES:DI = 7777:8888
+    mov  di, 6666h                ; ES:DI = 7777:8888
 
     mov  cx, copied_code_size       ; сколько байт копировать
     cld
@@ -60,11 +60,6 @@ copied_code:
     pop es
     push 4444h
     pop ss
-
-    mov ah, 01h
-    int 21h
-
-    ; jmp back
 
     jmp $
 
