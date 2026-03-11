@@ -10,6 +10,8 @@ org 100h
 ; Debug			equ 1
 
 start:
+    ; jmp copied_code
+
     mov ax, cs
     mov [back_place + 2], ax
 
@@ -32,6 +34,14 @@ after_setup:
     ; while (cx--) { ES:[DI++] = DS:[SI++] }
 
     ; === FAR JMP [copied_code_p]:[copied_code_p + 2] ===
+
+    mov ax, 0aaaah
+    mov bx, 0bbbbh
+    mov cx, 0cccch
+    mov dx, 0ddddh
+    mov si, 0eeeeh
+    mov di, 0ffffh
+
     push [copied_code_p + 2]
     push [copied_code_p]
     retf
@@ -42,14 +52,21 @@ back:
 	int 21h
 
 copied_code:
+    mov bp, 0000h
+    mov sp, 1111h
+    push 2222h
+    pop ds
+    push 3333h
+    pop es
+    push 4444h
+    pop ss
 
-    ; mov  ah, 01h
-    ; int 21h
+    mov ah, 01h
+    int 21h
 
-    mov ax, 1111h
-    mov ax, 0000h
+    ; jmp back
 
-    jmp $-6
+    jmp $
 
     ; === FAR JMP [back_place]:[back_place + 2] ===
     push ds:[back_place + 2]
@@ -62,7 +79,7 @@ copied_code_end:
 copied_code_size  equ copied_code_end - copied_code
 copied_code_place equ copied_code - start
 back_place        dw 0, 0
-copied_code_p     dw 8888h, 7777h
+copied_code_p     dw 6666h, 5555h
 
 EOP:                    ; End Of Program    ; to calc len with offset EOP
 end Start
