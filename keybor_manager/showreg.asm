@@ -264,21 +264,21 @@ NewInt09h PROC
     cmp cl, 1Dh or 80h              ; Left Ctrl break = 9Dh
     je @@ctrl_release
 
-    ; --- / break: clear slash_down (checked before ctrl guard so it always fires) ---
-    cmp cl, 35h or 80h              ; / break = B5h
+    ; --- / break: clear key_down (checked before ctrl guard so it always fires) ---
+    cmp cl, 3ch or 80h              ; F2 break = B5h
     je @@slash_release
 
     ; --- / press: only while Ctrl is held, no auto-repeat ---
     test byte ptr cs:[ctrl_down], 1
     jz @@done
 
-    cmp cl, 35h                     ; / make
+    cmp cl, 3ch                     ; F2 make
     jne @@done
 
-    test byte ptr cs:[slash_down], 1    ; already pressed? (auto-repeat guard)
+    test byte ptr cs:[key_down], 1    ; already pressed? (auto-repeat guard)
     jnz @@done
 
-    or byte ptr cs:[slash_down], 1      ; mark / as down
+    or byte ptr cs:[key_down], 1      ; mark F2 as down
 
     ; Toggle: show or hide
     test byte ptr cs:[window_visible], 1
@@ -322,7 +322,7 @@ NewInt09h PROC
     jnz @@show_d2v
 
     mov byte ptr cs:[window_visible], 1
-    jmp @@done
+    jmp @@done_no_old_int
 
 @@hide:
     ; ==== Hide window: copy save_buf -> video ====
@@ -342,7 +342,7 @@ NewInt09h PROC
     jnz @@hide_s2v
 
     mov byte ptr cs:[window_visible], 0
-    jmp @@done
+    jmp @@done_no_old_int
 
 @@ctrl_press:
     or byte ptr cs:[ctrl_down], 1
@@ -350,15 +350,30 @@ NewInt09h PROC
 
 @@ctrl_release:
     and byte ptr cs:[ctrl_down], 0FEh
-    and byte ptr cs:[slash_down], 0FEh
+    and byte ptr cs:[key_down], 0FEh
     jmp @@done
 
 @@slash_release:
-    and byte ptr cs:[slash_down], 0FEh
+    and byte ptr cs:[key_down], 0FEh
 
 @@done:
     pop es ds bp di si dx cx bx ax
 	jmp dword ptr cs:[old_int09_ptr]
+
+@@done_no_old_int:
+
+    in  al,  61h                    ; mark keyboard to receive a scancode
+    or  al,  80h
+    out 61h, al
+    and al,  not 80h
+    out 61h, al
+
+    mov al,  20h                    ; mark IRQ
+    out 20h, al
+
+    pop es ds bp di si dx cx bx ax
+    iret
+
 NewInt09h ENDP
 
 INCLUDE frame.inc
